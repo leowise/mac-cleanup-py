@@ -17,6 +17,8 @@ class Args:
     custom_path: bool = attr.ib(default=False)
     force: bool = attr.ib(default=False)
     verbose: bool = attr.ib(default=False)
+    safe_delete: bool = attr.ib(default=False)
+    restore: bool = attr.ib(default=False)
 
 
 parser = ArgumentParser(
@@ -39,6 +41,14 @@ parser.add_argument("-p", "--custom-path", help="Specify path for custom modules
 parser.add_argument("-f", "--force", help="Accept all warnings", action="store_true")
 
 parser.add_argument("-v", "--verbose", help="Print folders to be deleted", action="store_true")
+
+parser.add_argument(
+    "-s", "--safe-delete", help="Move files to trash instead of permanent deletion", action="store_true"
+)
+
+parser.add_argument(
+    "-r", "--restore", help="Restore files from backups", action="store_true"
+)
 
 args = Args()
 parser.parse_args(namespace=args)

@@ -121,7 +121,16 @@ class Path(_BaseCommand):
     def __init__(self, path: str):
         self.__path: Final[Path_] = Path_(path).expanduser()
 
-        tmp_command = "rm -rf '{path}'".format(path=self.__path.as_posix())
+        # Use trash command if safe-delete is enabled
+        if args.safe_delete:
+            # Use osascript to move to trash (safer than rm -rf)
+            tmp_command = (
+                "osascript -e 'tell application \"Finder\" to delete "
+                f"POSIX file \"{self.__path.as_posix()}\"'"
+            )
+        else:
+            # Use rm -rf for permanent deletion
+            tmp_command = "rm -rf '{path}'".format(path=self.__path.as_posix())
 
         super().__init__(command_=tmp_command)
 
@@ -150,4 +159,44 @@ class Path(_BaseCommand):
         if not all([check_deletable(path=self.__path), check_exists(path=self.__path, expand_user=False)]):
             return
 
-        return super()._execute(ignore_errors=ignore_errors)
+        # Calculate size for confirmation prompt
+        from mac_cleanup.core import _Collector
+        size = _Collector._get_size(self.__path)
+        from mac_cleanup.utils import bytes_to_human
+        size_human = bytes_to_human(size)
+
+        # Show confirmation prompt unless force flag is used
+        if not args.force:
+            from mac_cleanup.progress import ProgressBar
+            action_text = "move to trash" if args.safe_delete else "permanently delete"
+            prompt_text = (
+                f"This will {action_text}: {self.__path.as_posix()}\n"
+                f"Estimated size: {size_human}\n\n"
+                f"This action {'cannot be undone' if not args.safe_delete else 'can be undone from Trash'}!"
+            )
+            if not ProgressBar.prompt(
+                prompt_text=prompt_text,
+                prompt_title="[danger]⚠️  DELETION CONFIRMATION REQUIRED"
+            ):
+                return  # User cancelled
+
+        # Create backup before deletion (unless safe_delete is used, since trash is recoverable)
+        backup_path = None
+        if not args.safe_delete:
+            from mac_cleanup.backup import backup_manager
+            backup_path = backup_manager.create_backup(self.__path)
+
+        # Execute the command
+        result = super()._execute(ignore_errors=ignore_errors)
+
+        # Log the operation
+        from mac_cleanup.logger import logger
+        action = "move_to_trash" if args.safe_delete else "delete"
+        success = result is not None  # Command execution result indicates success
+        logger.log_operation(self.__path.as_posix(), size, action, success)
+
+        # Log backup creation if it was created
+        if backup_path:
+            logger.log_operation(str(backup_path), size, "backup_created", True)
+
+        return result

@@ -49,6 +49,68 @@ class EntryPoint:
             text=f"Removed - [success]{bytes_to_human(free_space_after - free_space_before)}", title="[info]Success"
         )
 
+    def restore_backups(self) -> None:
+        """Interactive backup restoration."""
+        from mac_cleanup.backup import backup_manager
+
+        # Get available backups
+        backups = backup_manager.list_backups()
+
+        if not backups:
+            print_panel(text="No backups available for restoration", title="[info]Backup Restore")
+            return
+
+        # Display available backups
+        console.print("[bold]Available Backups:[/bold]")
+        for i, backup in enumerate(backups, 1):
+            console.print(
+                f"{i}. {backup['path'].name} - {backup['size_human']} - "
+                f"Created: {backup['created'].strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+
+        # Get user selection
+        from rich.prompt import IntPrompt
+        try:
+            choice = IntPrompt.ask(
+                "Select backup to restore (number)",
+                choices=[str(i) for i in range(1, len(backups) + 1)]
+            )
+        except KeyboardInterrupt:
+            console.print("Restore cancelled")
+            return
+
+        selected_backup = backups[choice - 1]
+
+        # Confirm restoration
+        from rich.prompt import Confirm
+        try:
+            confirm = Confirm.ask(
+                f"Restore {selected_backup['path'].name} to current directory?",
+                default=False
+            )
+        except KeyboardInterrupt:
+            console.print("Restore cancelled")
+            return
+
+        if not confirm:
+            console.print("Restore cancelled")
+            return
+
+        # Perform restoration
+        console.print(f"Restoring {selected_backup['path'].name}...")
+        success = backup_manager.restore_backup(selected_backup["path"])
+
+        if success:
+            print_panel(
+                text=f"Successfully restored {selected_backup['path'].name}",
+                title="[success]Restore Complete"
+            )
+        else:
+            print_panel(
+                text=f"Failed to restore {selected_backup['path'].name}",
+                title="[danger]Restore Failed"
+            )
+
     @catch_exception
     def start(self) -> None:
         """Start mac_cleanup_py by cleaning console, loading config and parsing argument."""
@@ -66,6 +128,11 @@ class EntryPoint:
 
         # Check config
         config(configuration_prompted=args.configure)
+
+        # Handle restore mode
+        if args.restore:
+            self.restore_backups()
+            return
 
         # Handle dry runs
         if args.dry_run:
