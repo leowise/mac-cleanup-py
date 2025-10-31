@@ -335,7 +335,7 @@ def yarn():
         with clc as unit:
             unit.message("Cleaning up Yarn Cache")
             unit.add(Command("yarn cache clean --force"))
-            unit.add(Path("~/Library/Caches/yarn").dry_run_only())
+            unit.add(Path("~/Library/Caches/clear").dry_run_only())
 
 
 def bun():

@@ -1,4 +1,4 @@
-"""Modified rich progress bar."""
+"""Enhanced rich progress bar with detailed status reporting."""
 
 from typing import Iterable, Optional, Sequence
 
@@ -11,6 +11,7 @@ from rich.progress import (
     TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
+    TransferSpeedColumn,
 )
 from rich.prompt import Confirm
 
@@ -18,15 +19,17 @@ from mac_cleanup.console import console, print_panel
 
 
 class _ProgressBar:
-    """Proxy rich progress bar with blocking prompt."""
+    """Enhanced rich progress bar with detailed status and security feedback."""
 
     def __init__(self):
-        # Call parent init w/ default stuff
+        # Enhanced progress bar with more detailed columns
         self.current_progress = Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TaskProgressColumn(show_speed=True),
+            TransferSpeedColumn(),
+            TextColumn("[dim]{task.fields[status]}"),
             TimeRemainingColumn(elapsed_when_finished=True),
             TimeElapsedColumn(),
             console=console,
@@ -88,25 +91,35 @@ class _ProgressBar:
         sequence: Iterable[ProgressType] | Sequence[ProgressType],
         total: Optional[float] = None,
         description: str = "Working...",
+        status: str = "",
     ) -> Iterable[ProgressType]:
         """
-        Wrapper other :func:`rich.progress.track`
+        Enhanced wrapper for progress tracking with status updates.
 
         :param sequence: Sequence (must support "len") you wish to iterate over.
         :param total: Total number of steps. Default is len(sequence).
         :param description: Description of task show next to progress bar. Defaults to "Working".
+        :param status: Additional status information to display.
         :return: An iterable of the values in the sequence
         """
 
         # Clear previous Live instance
         self.current_progress.console.clear_live()
 
-        # Get new progress instance with default stuff
+        # Get new progress instance with enhanced columns
         self.__init__()
 
-        # Call context manager and yield from it
+        # Call context manager and yield from it with status field
         with self.current_progress:
-            yield from self.current_progress.track(sequence, total=total, description=description)
+            task_id = self.current_progress.add_task(
+                description=description,
+                total=total,
+                status=status
+            )
+            yield from self.current_progress.track(
+                sequence,
+                task_id=task_id
+            )
 
 
 # ProgressBar instance for all project

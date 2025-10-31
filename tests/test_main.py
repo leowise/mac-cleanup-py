@@ -102,7 +102,7 @@ class TestEntryPoint:
         assert "Success" in captured_stdout
 
         # Check correct size in stdout
-        assert f"Removed - {size_multiplier / 2} GB" in captured_stdout
+        assert f"• Space recovered: {size_multiplier / 2} GB" in captured_stdout
 
     @pytest.mark.parametrize("cleanup_prompted", [True, False])
     @pytest.mark.parametrize("verbose", [True, False])
@@ -158,20 +158,20 @@ class TestEntryPoint:
         captured_stdout = capsys.readouterr().out
 
         # Check title and body with estimated size
-        assert "Dry run results" in captured_stdout
-        assert "Approx 1.0 GB will be cleaned" in captured_stdout
+        assert "📊 Dry Run Results:" in captured_stdout
+        assert "Estimated space to recover: 1.0 GB" in captured_stdout
 
         # Check verbose message
         if verbose:
-            assert "1.0 GB test" in captured_stdout
+            assert "1.0 GB - test" in captured_stdout
 
         # Check no verbose message
         if not verbose:
-            assert "1.0 GB test" not in captured_stdout
+            assert "1.0 GB - test" not in captured_stdout
 
         # Check exit message
         if not cleanup_prompted:
-            assert "Exiting..." in captured_stdout
+            assert "🛑 Cleanup cancelled by user." in captured_stdout
 
     def test_dry_run_prompt_error(self, capsys: CaptureFixture[str], monkeypatch: MonkeyPatch):
         """Test errors in dry_run in :class:`mac_cleanup.main.EntryPoint`"""
@@ -216,8 +216,8 @@ class TestEntryPoint:
         captured_stdout = capsys.readouterr().out
 
         # Check title and body with estimated size
-        assert "Dry run results" in captured_stdout
-        assert "Approx 1.0 GB will be cleaned" in captured_stdout
+        assert "📊 Dry Run Results:" in captured_stdout
+        assert "Estimated space to recover: 1.0 GB" in captured_stdout
 
         # Check error message and exit message
         assert "Do not enter symbols that can't be decoded to UTF-8" in captured_stdout

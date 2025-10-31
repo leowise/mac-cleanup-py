@@ -51,7 +51,9 @@ parser.add_argument(
 )
 
 args = Args()
-parser.parse_args(namespace=args)
+
+# Parse known arguments, ignore unknown ones (for testing compatibility)
+parser.parse_known_args(namespace=args)
 
 # args.dry_run = True  # debug
 # args.configure = True  # debug

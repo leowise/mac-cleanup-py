@@ -11,13 +11,13 @@ from beartype.roar import BeartypeCallHintParamViolation
     ("command", "ignore_errors", "output"),
     [
         # test empty output
-        ("echo", True, ""),
+        ("python -c ''", True, ""),
         # test stdout
-        ("echo 'test'", True, "test"),
+        ("python -c 'print(\"test\")'", True, "test"),
         # test no errors
-        ("echo 'test' >&2", True, ""),
+        ("python -c 'import sys; print(\"test\", file=sys.stderr)'", True, ""),
         # test redirect stderr
-        ("echo 'test' >&2", False, "test"),
+        ("python -c 'import sys; print(\"test\", file=sys.stderr)'", False, "test"),
         # test beartype
         (123, True, ""),
     ],
@@ -25,7 +25,15 @@ from beartype.roar import BeartypeCallHintParamViolation
 def test_cmd(command: str | int, ignore_errors: bool, output: str):
     """Test :class:`subprocess.Popen` command execution in :meth:`mac_cleanup.utils.cmd`"""
 
-    from mac_cleanup.utils import cmd
+    # Set dummy command line args to avoid parsing issues
+    import sys
+    original_argv = sys.argv
+    sys.argv = ["test"]
+
+    try:
+        from mac_cleanup.utils import cmd
+    finally:
+        sys.argv = original_argv
 
     if isinstance(command, int):
         with pytest.raises(BeartypeCallHintParamViolation):

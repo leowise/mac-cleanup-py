@@ -207,7 +207,7 @@ class Config:
         self.__modules.update(dict(getmembers(object=default_modules, predicate=isfunction)))
 
     def __load_custom(self) -> None:
-        """Loads custom modules and."""
+        """Loads custom modules with security validation."""
 
         # Empty dict if no custom path
         if not self.__custom_modules_path:
@@ -216,33 +216,69 @@ class Config:
         from importlib.machinery import SourceFileLoader
         from importlib.util import module_from_spec, spec_from_loader
         from pathlib import Path
+        from mac_cleanup.module_security import validate_custom_module
 
         tmp_modules: dict[str, Callable[..., None]] = dict()
 
-        # Imports all modules from the given path
-        for module in Path(self.__custom_modules_path).expanduser().rglob("*.py"):
-            # Get filename
-            filename = module.name.split(".py")[0]
+        # Get all Python files in the custom modules directory
+        custom_path = Path(self.__custom_modules_path).expanduser()
+        python_files = list(custom_path.rglob("*.py"))
 
-            # Set module loader
-            loader = SourceFileLoader(fullname=filename, path=module.as_posix())
+        if not python_files:
+            console.print(f"[warning]No Python files found in custom modules path: {custom_path}[/warning]")
+            return
 
-            # Get module spec
-            spec = spec_from_loader(loader.name, loader)
+        console.print(f"[info]Found {len(python_files)} custom module file(s) to validate[/info]")
+        console.print("[warning]⚠️  Custom modules can pose security risks.[/warning]")
+        console.print("[warning]Only load modules from trusted sources![/warning]")
+        console.print("[info]Each module will be scanned for dangerous code patterns...[/info]")
 
-            # Check next file if spec is empty
-            if spec is None:
-                continue  # pragma: no cover # TODO: add test later
+        # Validate and load each module
+        for module_file in python_files:
+            module_path_str = module_file.as_posix()
 
-            # Get all modules from file
-            modules = module_from_spec(spec)
+            # Security validation
+            console.print(f"[info]Validating custom module: {module_file.name}[/info]")
+            if not validate_custom_module(module_path_str):
+                console.print(f"[danger]Skipping unsafe custom module: {module_file.name}[/danger]")
+                continue
 
-            # Execute module
-            loader.exec_module(modules)
+            # If validation passes, load the module
+            try:
+                # Get filename without extension
+                filename = module_file.name.split(".py")[0]
 
-            # Add modules to the list
-            # Duplicates will be overwritten
-            tmp_modules.update(dict(getmembers(object=modules, predicate=isfunction)))
+                # Set module loader
+                loader = SourceFileLoader(fullname=filename, path=module_path_str)
+
+                # Get module spec
+                spec = spec_from_loader(loader.name, loader)
+
+                # Check next file if spec is empty
+                if spec is None:
+                    console.print(f"[warning]Could not create spec for {module_file.name}[/warning]")
+                    continue  # pragma: no cover # TODO: add test later
+
+                # Get module object
+                modules = module_from_spec(spec)
+
+                # Execute module
+                loader.exec_module(modules)
+
+                # Add modules to the list
+                # Duplicates will be overwritten
+                tmp_modules.update(dict(getmembers(object=modules, predicate=isfunction)))
+
+                console.print(f"[success]✓ Loaded custom module: {module_file.name}[/success]")
+
+            except Exception as e:
+                console.print(f"[danger]Error loading custom module {module_file.name}: {e}[/danger]")
+                continue
+
+        if tmp_modules:
+            console.print(f"[success]Successfully loaded {len(tmp_modules)} custom module function(s)[/success]")
+        else:
+            console.print("[warning]No valid custom modules were loaded[/warning]")
 
         self.__modules.update(tmp_modules)
 
