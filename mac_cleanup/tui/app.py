@@ -7,6 +7,7 @@ from typing import Callable, Optional
 from textual import work
 from textual.app import App
 
+from mac_cleanup.tui.screens.dry_run_summary import ConfirmCleanup, DryRunSummaryScreen
 from mac_cleanup.tui.screens.loading import LoadingScreen
 from mac_cleanup.tui.screens.progress import CleanupDone, ProgressScreen
 from mac_cleanup.tui.screens.results import ResultsScreen
@@ -41,6 +42,8 @@ class MacCleanupApp(App[None]):
         self._config_path = config_path or _default_config_path()
         self._all_modules: dict[str, Callable[..., None]] = {}
         self._enabled_modules: list[str] = []
+        self._safe_delete: bool = False
+        self._update_brew: bool = False
 
     def on_mount(self) -> None:
         self.push_screen(LoadingScreen())
@@ -104,10 +107,14 @@ class MacCleanupApp(App[None]):
 
     def on_run_requested(self, message: RunRequested) -> None:
         self._save_config(message.enabled_modules)
+        self._safe_delete = message.safe_delete
+        self._update_brew = message.update_brew
+
+        # Always run dry-run analysis first
         self.push_screen(
             ProgressScreen(
                 enabled_modules=message.enabled_modules,
-                dry_run=message.dry_run,
+                dry_run=True,
                 safe_delete=message.safe_delete,
                 update_brew=message.update_brew,
                 config_path=self._config_path,
@@ -116,4 +123,26 @@ class MacCleanupApp(App[None]):
         )
 
     def on_cleanup_done(self, message: CleanupDone) -> None:
-        self.push_screen(ResultsScreen(result=message.result))
+        if message.result.dry_run:
+            # Dry-run finished — show summary for user to review and confirm
+            self.push_screen(DryRunSummaryScreen(result=message.result))
+        else:
+            # Actual cleanup finished — show final results
+            self.push_screen(ResultsScreen(result=message.result))
+
+    def on_confirm_cleanup(self, message: ConfirmCleanup) -> None:
+        """User confirmed cleanup from dry-run summary — run for real."""
+        # Pop summary + dry-run progress screens
+        self.pop_screen()
+        self.pop_screen()
+
+        self.push_screen(
+            ProgressScreen(
+                enabled_modules=message.enabled_modules,
+                dry_run=False,
+                safe_delete=self._safe_delete,
+                update_brew=self._update_brew,
+                config_path=self._config_path,
+                module_fns=self._all_modules,
+            )
+        )

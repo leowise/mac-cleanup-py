@@ -14,6 +14,7 @@ class ModuleResult:
     name: str
     status: str  # "done" | "error" | "skipped"
     error: Optional[str] = None
+    bytes_estimate: float = 0.0
 
 
 @dataclass
@@ -75,8 +76,13 @@ class CleanupRunner:
                 _Collector()
                 module_fn()
 
-                if not dry_run:
-                    collector = _Collector()
+                collector = _Collector()
+                module_bytes: float = 0.0
+
+                if dry_run:
+                    for path, size in collector._extract_paths():  # noqa: SLF001
+                        module_bytes += size
+                else:
                     for unit in collector._execute_list:  # noqa: SLF001
                         for mod in unit.modules:
                             try:
@@ -84,7 +90,9 @@ class CleanupRunner:
                             except Exception:
                                 pass
 
-                mod_result = ModuleResult(name=module_name, status="done")
+                mod_result = ModuleResult(
+                    name=module_name, status="done", bytes_estimate=module_bytes
+                )
             except Exception as exc:
                 mod_result = ModuleResult(name=module_name, status="error", error=str(exc))
 
