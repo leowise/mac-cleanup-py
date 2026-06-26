@@ -1,7 +1,7 @@
 """Live progress dashboard — second screen of the TUI."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from textual import work
 from textual.app import ComposeResult
@@ -30,6 +30,9 @@ class ProgressScreen(Screen[None]):
         enabled_modules: list[str],
         dry_run: bool,
         config_path: Path,
+        safe_delete: bool = False,
+        update_brew: bool = False,
+        module_fns: Optional[dict[str, Callable[..., None]]] = None,
         name: Optional[str] = None,
         id: Optional[str] = None,  # noqa: A002
         classes: Optional[str] = None,
@@ -37,11 +40,21 @@ class ProgressScreen(Screen[None]):
         super().__init__(name=name, id=id, classes=classes)
         self._enabled_modules = enabled_modules
         self._dry_run = dry_run
+        self._safe_delete = safe_delete
+        self._update_brew = update_brew
         self._config_path = config_path
+        self._module_fns = module_fns
         self._total = len(enabled_modules)
 
     def compose(self) -> ComposeResult:
-        mode = "DRY-RUN" if self._dry_run else "LIVE"
+        flags: list[str] = []
+        if self._dry_run:
+            flags.append("DRY-RUN")
+        if self._safe_delete:
+            flags.append("SAFE-DELETE")
+        if self._update_brew:
+            flags.append("BREW-UPDATE")
+        mode = ", ".join(flags) if flags else "LIVE"
         yield Header(show_clock=True)
         yield Label(f"Running cleanup ({mode}) — {self._total} modules", id="status-label")
         yield ProgressBar(total=self._total, show_eta=True, id="overall-progress")
@@ -53,7 +66,7 @@ class ProgressScreen(Screen[None]):
 
     @work(exclusive=True)
     async def _run_cleanup(self) -> None:
-        runner = CleanupRunner(config_path=self._config_path)
+        runner = CleanupRunner(config_path=self._config_path, module_fns=self._module_fns)
         log = self.query_one(RichLog)
         bar = self.query_one(ProgressBar)
 

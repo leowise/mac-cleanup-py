@@ -30,25 +30,13 @@ async def test_runner_calls_callbacks(tmp_path):
 
     mock_modules = {"brew": MagicMock(), "npm": MagicMock()}
 
-    with (
-        patch("mac_cleanup.tui.runner.Config") as mock_cfg_cls,
-        patch("mac_cleanup.tui.runner._Collector") as mock_col_cls,
-        patch("mac_cleanup.tui.runner.statvfs") as mock_stat,
-    ):
-        mock_cfg = MagicMock()
-        mock_cfg.get_modules = mock_modules
-        mock_cfg_cls.return_value = mock_cfg
-
-        mock_collector = MagicMock()
-        mock_collector._execute_list = []
-        mock_col_cls.return_value = mock_collector
-
+    with patch("mac_cleanup.tui.runner.statvfs") as mock_stat:
         mock_statvfs_result = MagicMock()
         mock_statvfs_result.f_bavail = 1000
         mock_statvfs_result.f_frsize = 4096
         mock_stat.return_value = mock_statvfs_result
 
-        runner = CleanupRunner(config_path=config_path)
+        runner = CleanupRunner(config_path=config_path, module_fns=mock_modules)
         result = await runner.run(
             enabled_modules=["brew", "npm"],
             dry_run=True,
@@ -71,17 +59,10 @@ async def test_runner_handles_module_error(tmp_path):
     def bad_module():
         raise RuntimeError("boom")
 
-    with (
-        patch("mac_cleanup.tui.runner.Config") as mock_cfg_cls,
-        patch("mac_cleanup.tui.runner._Collector"),
-        patch("mac_cleanup.tui.runner.statvfs") as mock_stat,
-    ):
-        mock_cfg = MagicMock()
-        mock_cfg.get_modules = {"bad": bad_module}
-        mock_cfg_cls.return_value = mock_cfg
+    with patch("mac_cleanup.tui.runner.statvfs") as mock_stat:
         mock_stat.return_value = MagicMock(f_bavail=1000, f_frsize=4096)
 
-        runner = CleanupRunner(config_path=config_path)
+        runner = CleanupRunner(config_path=config_path, module_fns={"bad": bad_module})
         result = await runner.run(
             enabled_modules=["bad"],
             dry_run=False,
@@ -98,17 +79,10 @@ async def test_runner_skips_missing_module(tmp_path):
     config_path = tmp_path / ".mac_cleanup_py"
     completed: list[ModuleResult] = []
 
-    with (
-        patch("mac_cleanup.tui.runner.Config") as mock_cfg_cls,
-        patch("mac_cleanup.tui.runner._Collector"),
-        patch("mac_cleanup.tui.runner.statvfs") as mock_stat,
-    ):
-        mock_cfg = MagicMock()
-        mock_cfg.get_modules = {}
-        mock_cfg_cls.return_value = mock_cfg
+    with patch("mac_cleanup.tui.runner.statvfs") as mock_stat:
         mock_stat.return_value = MagicMock(f_bavail=1000, f_frsize=4096)
 
-        runner = CleanupRunner(config_path=config_path)
+        runner = CleanupRunner(config_path=config_path, module_fns={})
         await runner.run(
             enabled_modules=["nonexistent"],
             dry_run=False,
@@ -173,6 +147,17 @@ async def test_app_dry_run_toggle(tmp_path):
         assert screen.dry_run is False
         await pilot.press("d")
         assert screen.dry_run is True
+
+
+async def test_app_safe_delete_toggle(tmp_path):
+    app = MacCleanupApp(config_path=tmp_path / ".mac_cleanup_py")
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        screen = app.screen
+        assert isinstance(screen, SelectionScreen)
+        assert screen.safe_delete is False
+        await pilot.press("s")
+        assert screen.safe_delete is True
 
 
 async def test_app_quit_from_selection(tmp_path):

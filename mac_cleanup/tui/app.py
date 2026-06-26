@@ -53,13 +53,12 @@ class MacCleanupApp(App[None]):
 
         self._load_modules()
         available = probe_available_modules(self._all_modules)
-        # Pre-check only modules that are both available and in the user's config
         enabled = [m for m in self._enabled_modules if m in available]
 
         self.call_from_thread(self._show_selection, available, enabled)
 
     def _show_selection(self, available: list[str], enabled: list[str]) -> None:
-        self.pop_screen()  # remove LoadingScreen
+        self.pop_screen()
         self.push_screen(SelectionScreen(all_modules=available, enabled_modules=enabled))
 
     def _load_modules(self) -> None:
@@ -69,6 +68,7 @@ class MacCleanupApp(App[None]):
             from mac_cleanup.core import _Collector
 
             _Collector._shared_instance.clear()
+            _Collector()
             config = Config(config_path_=self._config_path)
             self._all_modules = config.get_modules
             self._enabled_modules = list(config.get_config_data.get("enabled", []))
@@ -80,12 +80,38 @@ class MacCleanupApp(App[None]):
             self._all_modules = dict(getmembers(default_modules, isfunction))
             self._enabled_modules = []
 
+    def _save_config(self, enabled_modules: list[str]) -> None:
+        """Persist the selected modules to the config file."""
+        try:
+            from toml import dump
+
+            self._config_path.parent.mkdir(exist_ok=True, parents=True)
+            data = {"enabled": enabled_modules}
+            custom_path = None
+            if self._config_path.exists():
+                from toml import load
+                try:
+                    existing = load(self._config_path)
+                    custom_path = existing.get("custom_path")
+                except Exception:
+                    pass
+            if custom_path:
+                data["custom_path"] = custom_path
+            with open(self._config_path, "w") as f:
+                dump(data, f)
+        except Exception:
+            self.notify("Failed to save config", severity="warning")
+
     def on_run_requested(self, message: RunRequested) -> None:
+        self._save_config(message.enabled_modules)
         self.push_screen(
             ProgressScreen(
                 enabled_modules=message.enabled_modules,
                 dry_run=message.dry_run,
+                safe_delete=message.safe_delete,
+                update_brew=message.update_brew,
                 config_path=self._config_path,
+                module_fns=self._all_modules,
             )
         )
 

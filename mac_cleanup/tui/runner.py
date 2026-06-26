@@ -6,7 +6,6 @@ from os import statvfs
 from pathlib import Path
 from typing import Callable, Optional
 
-from mac_cleanup.config import Config
 from mac_cleanup.core import _Collector
 
 
@@ -31,8 +30,23 @@ OnCompleteCallback = Callable[[ModuleResult], None]
 class CleanupRunner:
     """Wraps the sync cleanup engine for use from an async Textual app."""
 
-    def __init__(self, config_path: Path) -> None:
+    def __init__(
+        self,
+        config_path: Path,
+        module_fns: Optional[dict[str, Callable[..., None]]] = None,
+    ) -> None:
         self._config_path = config_path
+        self._module_fns = module_fns
+
+    def _get_modules(self) -> dict[str, Callable[..., None]]:
+        """Return module dict, loading from config only if not provided."""
+        if self._module_fns is not None:
+            return self._module_fns
+        from mac_cleanup.config import Config
+        _Collector._shared_instance.clear()
+        _Collector()
+        config = Config(config_path_=self._config_path)
+        return config.get_modules
 
     def _run_sync(
         self,
@@ -41,11 +55,7 @@ class CleanupRunner:
         on_start: OnStartCallback,
         on_complete: OnCompleteCallback,
     ) -> CleanupResult:
-        # Reset Borg shared state so each TUI run starts clean
-        _Collector._shared_instance.clear()
-
-        config = Config(config_path_=self._config_path)
-        all_modules = config.get_modules
+        all_modules = self._get_modules()
 
         result = CleanupResult(dry_run=dry_run)
         free_before = float(statvfs("/").f_bavail * statvfs("/").f_frsize)
@@ -61,8 +71,8 @@ class CleanupRunner:
             on_start(module_name)
 
             try:
-                # Reset collector so this module runs in isolation
                 _Collector._shared_instance.clear()
+                _Collector()
                 module_fn()
 
                 if not dry_run:

@@ -15,7 +15,7 @@ class ResultsScreen(Screen[None]):
 
     BINDINGS = [
         ("r", "run_again", "Run again"),
-        ("b", "back", "Back"),
+        ("b", "back_to_log", "View log"),
         ("q", "quit", "Quit"),
     ]
 
@@ -32,10 +32,22 @@ class ResultsScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         mode = "DRY-RUN" if self._result.dry_run else "LIVE"
         freed = bytes_to_human(self._result.total_bytes_freed)
+
+        done = sum(1 for m in self._result.module_results if m.status == "done")
+        errors = sum(1 for m in self._result.module_results if m.status == "error")
+        skipped = sum(1 for m in self._result.module_results if m.status == "skipped")
+
+        summary_parts = [f"[bold cyan]{freed}[/bold cyan] freed"]
+        summary_parts.append(f"[green]{done}[/green] done")
+        if errors:
+            summary_parts.append(f"[red]{errors}[/red] errors")
+        if skipped:
+            summary_parts.append(f"[yellow]{skipped}[/yellow] skipped")
+
         yield Header(show_clock=True)
         yield Label(
             f"[bold green]Cleanup complete ({mode})[/bold green]\n\n"
-            f"Total freed: [bold cyan]{freed}[/bold cyan]",
+            + "  |  ".join(summary_parts),
             id="summary",
         )
         yield DataTable(id="module-table")
@@ -57,8 +69,8 @@ class ResultsScreen(Screen[None]):
         self.app.pop_screen()
         self.app.pop_screen()
 
-    def action_back(self) -> None:
-        self.app.pop_screen()
+    def action_back_to_log(self) -> None:
+        # Pop results only, show progress log
         self.app.pop_screen()
 
     def action_quit(self) -> None:

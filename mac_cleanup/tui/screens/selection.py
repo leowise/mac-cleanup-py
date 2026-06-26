@@ -7,16 +7,25 @@ from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Label
 
+from mac_cleanup.__version__ import __version__
 from mac_cleanup.tui.widgets.module_list import ModuleList
 
 
 class RunRequested(Message):
     """Posted when user confirms module selection and wants to run cleanup."""
 
-    def __init__(self, enabled_modules: list[str], dry_run: bool) -> None:
+    def __init__(
+        self,
+        enabled_modules: list[str],
+        dry_run: bool,
+        safe_delete: bool,
+        update_brew: bool,
+    ) -> None:
         super().__init__()
         self.enabled_modules = enabled_modules
         self.dry_run = dry_run
+        self.safe_delete = safe_delete
+        self.update_brew = update_brew
 
 
 class SelectionScreen(Screen[None]):
@@ -27,6 +36,8 @@ class SelectionScreen(Screen[None]):
         ("a", "select_all", "All"),
         ("n", "deselect_all", "None"),
         ("d", "toggle_dry_run", "Dry-run"),
+        ("s", "toggle_safe_delete", "Safe-delete"),
+        ("u", "toggle_update", "Brew update"),
         ("r", "run", "Run"),
         ("q", "quit", "Quit"),
     ]
@@ -43,17 +54,21 @@ class SelectionScreen(Screen[None]):
         self._all_modules = all_modules
         self._enabled_modules = enabled_modules
         self.dry_run: bool = False
+        self.safe_delete: bool = False
+        self.update_brew: bool = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Label(
-            "[bold]space[/bold] toggle  [bold]a[/bold] all  [bold]n[/bold] none  "
-            "[bold]d[/bold] dry-run  [bold]r[/bold] run  [bold]q[/bold] quit",
-            id="hint",
-        )
-        widget = ModuleList()
-        yield widget
+        yield Label(self._build_hint_text(), id="hint")
+        yield ModuleList()
         yield Footer()
+
+    def _build_hint_text(self) -> str:
+        return (
+            "[bold]space[/bold] toggle  [bold]a[/bold] all  [bold]n[/bold] none  "
+            "[bold]d[/bold] dry-run  [bold]s[/bold] safe-delete  [bold]u[/bold] brew update  "
+            "[bold]r[/bold] run  [bold]q[/bold] quit"
+        )
 
     def on_mount(self) -> None:
         ml = self.query_one(ModuleList)
@@ -62,11 +77,26 @@ class SelectionScreen(Screen[None]):
         self._update_header()
 
     def _update_header(self) -> None:
-        mode = "[yellow]DRY-RUN[/yellow]" if self.dry_run else "[green]LIVE[/green]"
-        self.sub_title = f"Mode: {mode}"
+        flags: list[str] = []
+        if self.dry_run:
+            flags.append("[yellow]DRY-RUN[/yellow]")
+        if self.safe_delete:
+            flags.append("[cyan]SAFE-DELETE[/cyan]")
+        if self.update_brew:
+            flags.append("[magenta]BREW-UPDATE[/magenta]")
+        mode = "  ".join(flags) if flags else "[green]LIVE[/green]"
+        self.sub_title = f"v{__version__}  |  {mode}"
 
     def action_toggle_dry_run(self) -> None:
         self.dry_run = not self.dry_run
+        self._update_header()
+
+    def action_toggle_safe_delete(self) -> None:
+        self.safe_delete = not self.safe_delete
+        self._update_header()
+
+    def action_toggle_update(self) -> None:
+        self.update_brew = not self.update_brew
         self._update_header()
 
     def action_select_all(self) -> None:
@@ -80,7 +110,12 @@ class SelectionScreen(Screen[None]):
         if not selected:
             self.notify("Select at least one module.", severity="warning")
             return
-        self.post_message(RunRequested(enabled_modules=selected, dry_run=self.dry_run))
+        self.post_message(RunRequested(
+            enabled_modules=selected,
+            dry_run=self.dry_run,
+            safe_delete=self.safe_delete,
+            update_brew=self.update_brew,
+        ))
 
     def action_quit(self) -> None:
         self.app.exit()
