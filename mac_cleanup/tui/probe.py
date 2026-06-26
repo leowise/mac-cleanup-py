@@ -3,6 +3,14 @@
 from typing import Callable
 
 
+def _reset_collector() -> None:
+    """Reset the Borg-pattern Collector to a clean state."""
+    from mac_cleanup.core import _Collector
+
+    _Collector._shared_instance.clear()
+    _Collector()  # re-creates _execute_list in shared state
+
+
 def probe_available_modules(modules: dict[str, Callable[..., None]]) -> list[str]:
     """
     Return sorted list of module names that are applicable on this system.
@@ -16,14 +24,14 @@ def probe_available_modules(modules: dict[str, Callable[..., None]]) -> list[str
     available: list[str] = []
 
     for name, fn in modules.items():
-        _Collector._shared_instance.clear()
+        _reset_collector()
         try:
             fn()
-            execute_list = _Collector._shared_instance.get("_execute_list", [])
-            if execute_list:
+            collector = _Collector()
+            if collector._execute_list:
                 available.append(name)
         except Exception:
             pass
 
-    _Collector._shared_instance.clear()
+    _reset_collector()
     return sorted(available)
