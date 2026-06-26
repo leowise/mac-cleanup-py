@@ -108,6 +108,13 @@ update_parser = subparsers.add_parser(
 _add_common_flags(update_parser)
 update_parser.set_defaults(update=True)
 
+subparsers.add_parser(
+    "ui",
+    help="Launch interactive TUI",
+    description="Launch the interactive terminal UI.",
+    formatter_class=RawTextHelpFormatter,
+)
+
 parser.add_argument("-n", "--dry-run", help="Run without deleting stuff", action="store_true")
 parser.add_argument("-u", "--update", help="Update Homebrew on cleanup", action="store_true")
 parser.add_argument("-c", "--configure", help="Open module configuration screen", action="store_true")

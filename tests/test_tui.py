@@ -119,6 +119,35 @@ async def test_runner_skips_missing_module(tmp_path):
     assert completed[0].status == "skipped"
 
 
+# --- MacCleanupApp integration tests ---
+
+from mac_cleanup.tui.app import MacCleanupApp  # noqa: E402
+from mac_cleanup.tui.screens.selection import SelectionScreen  # noqa: E402
+
+
+async def test_app_starts_on_selection_screen(tmp_path):
+    app = MacCleanupApp(config_path=tmp_path / ".mac_cleanup_py")
+    async with app.run_test() as pilot:
+        assert isinstance(app.screen, SelectionScreen)
+
+
+async def test_app_dry_run_toggle(tmp_path):
+    app = MacCleanupApp(config_path=tmp_path / ".mac_cleanup_py")
+    async with app.run_test() as pilot:
+        screen = app.screen
+        assert isinstance(screen, SelectionScreen)
+        assert screen.dry_run is False
+        await pilot.press("d")
+        assert screen.dry_run is True
+
+
+async def test_app_quit_from_selection(tmp_path):
+    app = MacCleanupApp(config_path=tmp_path / ".mac_cleanup_py")
+    async with app.run_test() as pilot:
+        await pilot.press("q")
+    # App exited cleanly — no exception raised
+
+
 # --- ProgressScreen tests ---
 
 from mac_cleanup.tui.screens.progress import ProgressScreen  # noqa: E402

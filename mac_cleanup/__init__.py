@@ -8,7 +8,13 @@ try:
 except ImportError:  # pragma: no cover
     __version__ = "source"
 
-main = EntryPoint().start
+def main() -> None:
+    if args.command in (None, "ui"):
+        from mac_cleanup.tui.app import MacCleanupApp
+
+        MacCleanupApp().run()
+    else:
+        EntryPoint().start()
 
 __title__ = "mac-cleanup-py"
 __all__ = ["Collector", "Path", "Command", "args", "main"]
