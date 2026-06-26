@@ -138,3 +138,4 @@ multiline-quotes = "double"
 minversion = "8.3.5"
 addopts = "--cov=mac_cleanup"
 testpaths = [ "tests" ]
+asyncio_mode = "auto"
