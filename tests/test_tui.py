@@ -117,3 +117,31 @@ async def test_runner_skips_missing_module(tmp_path):
         )
 
     assert completed[0].status == "skipped"
+
+
+# --- ModuleList widget tests ---
+
+from mac_cleanup.tui.widgets.module_list import ModuleList  # noqa: E402
+
+
+def test_build_selections_marks_enabled():
+    widget = ModuleList()
+    selections = widget.build_selections(
+        all_modules=["brew", "npm", "docker"],
+        enabled_modules=["brew", "docker"],
+    )
+    names = [str(s.prompt) for s in selections]
+    assert "brew" in names
+    assert "npm" in names
+    selected = {str(s.prompt) for s in selections if s.initial_state}
+    assert selected == {"brew", "docker"}
+
+
+def test_build_selections_sorted():
+    widget = ModuleList()
+    selections = widget.build_selections(
+        all_modules=["npm", "brew", "docker"],
+        enabled_modules=[],
+    )
+    names = [str(s.prompt) for s in selections]
+    assert names == sorted(names)
