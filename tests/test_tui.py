@@ -119,6 +119,21 @@ async def test_runner_skips_missing_module(tmp_path):
     assert completed[0].status == "skipped"
 
 
+# --- ProgressScreen tests ---
+
+from mac_cleanup.tui.screens.progress import ProgressScreen  # noqa: E402
+
+
+def test_progress_screen_instantiates(tmp_path):
+    screen = ProgressScreen(
+        enabled_modules=["brew"],
+        dry_run=False,
+        config_path=tmp_path / ".mac_cleanup_py",
+    )
+    assert screen._enabled_modules == ["brew"]
+    assert screen._dry_run is False
+
+
 # --- ModuleList widget tests ---
 
 from mac_cleanup.tui.widgets.module_list import ModuleList  # noqa: E402
