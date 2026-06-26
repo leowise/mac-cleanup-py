@@ -134,6 +134,24 @@ def test_progress_screen_instantiates(tmp_path):
     assert screen._dry_run is False
 
 
+# --- ResultsScreen tests ---
+
+from mac_cleanup.tui.screens.results import ResultsScreen  # noqa: E402
+
+
+def test_results_screen_instantiates():
+    result = CleanupResult(
+        module_results=[
+            ModuleResult(name="brew", status="done"),
+            ModuleResult(name="npm", status="error", error="timeout"),
+        ],
+        total_bytes_freed=1024.0 * 1024 * 50,
+        dry_run=False,
+    )
+    screen = ResultsScreen(result=result)
+    assert screen._result.total_bytes_freed == 1024.0 * 1024 * 50
+
+
 # --- ModuleList widget tests ---
 
 from mac_cleanup.tui.widgets.module_list import ModuleList  # noqa: E402
