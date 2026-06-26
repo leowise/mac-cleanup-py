@@ -2,10 +2,12 @@
 
 from os import environ
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from textual.app import App, ComposeResult
+from textual import work
+from textual.app import App
 
+from mac_cleanup.tui.screens.loading import LoadingScreen
 from mac_cleanup.tui.screens.progress import CleanupDone, ProgressScreen
 from mac_cleanup.tui.screens.results import ResultsScreen
 from mac_cleanup.tui.screens.selection import RunRequested, SelectionScreen
@@ -37,34 +39,45 @@ class MacCleanupApp(App[None]):
     ) -> None:
         super().__init__(driver_class=driver_class, css_path=css_path, watch_css=watch_css)
         self._config_path = config_path or _default_config_path()
-        self._all_modules: list[str] = []
+        self._all_modules: dict[str, Callable[..., None]] = {}
         self._enabled_modules: list[str] = []
 
     def on_mount(self) -> None:
+        self.push_screen(LoadingScreen())
+        self._probe_and_show_selection()
+
+    @work(thread=True)
+    def _probe_and_show_selection(self) -> None:
+        """Load config, probe installed apps, then switch to SelectionScreen."""
+        from mac_cleanup.tui.probe import probe_available_modules
+
         self._load_modules()
-        self.push_screen(
-            SelectionScreen(
-                all_modules=self._all_modules,
-                enabled_modules=self._enabled_modules,
-            )
-        )
+        available = probe_available_modules(self._all_modules)
+        # Pre-check only modules that are both available and in the user's config
+        enabled = [m for m in self._enabled_modules if m in available]
+
+        self.call_from_thread(self._show_selection, available, enabled)
+
+    def _show_selection(self, available: list[str], enabled: list[str]) -> None:
+        self.pop_screen()  # remove LoadingScreen
+        self.push_screen(SelectionScreen(all_modules=available, enabled_modules=enabled))
 
     def _load_modules(self) -> None:
-        """Load module names from config; falls back to all default modules on failure."""
+        """Load module functions from config; falls back to all default modules on failure."""
         try:
             from mac_cleanup.config import Config
             from mac_cleanup.core import _Collector
 
             _Collector._shared_instance.clear()
             config = Config(config_path_=self._config_path)
-            self._all_modules = sorted(config.get_modules.keys())
+            self._all_modules = config.get_modules
             self._enabled_modules = list(config.get_config_data.get("enabled", []))
         except Exception:
             from inspect import getmembers, isfunction
 
             from mac_cleanup import default_modules
 
-            self._all_modules = sorted(name for name, _ in getmembers(default_modules, isfunction))
+            self._all_modules = dict(getmembers(default_modules, isfunction))
             self._enabled_modules = []
 
     def on_run_requested(self, message: RunRequested) -> None:

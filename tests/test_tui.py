@@ -119,6 +119,37 @@ async def test_runner_skips_missing_module(tmp_path):
     assert completed[0].status == "skipped"
 
 
+# --- probe tests ---
+
+from mac_cleanup.tui.probe import probe_available_modules  # noqa: E402
+
+
+def test_probe_excludes_unavailable_modules():
+    """Module that adds nothing (app not installed) is excluded."""
+    def present_module():
+        from mac_cleanup.core import ProxyCollector as Collector
+        from mac_cleanup.core_modules import Path as CleanPath
+        with Collector() as unit:
+            unit.message("test")
+            unit.add(CleanPath("~/.Trash/*"))
+
+    def absent_module():
+        pass  # checks existence, finds nothing, adds nothing
+
+    result = probe_available_modules({"present": present_module, "absent": absent_module})
+    assert "present" in result
+    assert "absent" not in result
+
+
+def test_probe_handles_module_exception():
+    """Module that raises is treated as unavailable, not a crash."""
+    def bad_module():
+        raise RuntimeError("something went wrong")
+
+    result = probe_available_modules({"bad": bad_module})
+    assert "bad" not in result
+
+
 # --- MacCleanupApp integration tests ---
 
 from mac_cleanup.tui.app import MacCleanupApp  # noqa: E402
@@ -128,12 +159,15 @@ from mac_cleanup.tui.screens.selection import SelectionScreen  # noqa: E402
 async def test_app_starts_on_selection_screen(tmp_path):
     app = MacCleanupApp(config_path=tmp_path / ".mac_cleanup_py")
     async with app.run_test() as pilot:
+        await pilot.pause()  # let LoadingScreen worker finish
+        await app.workers.wait_for_complete()
         assert isinstance(app.screen, SelectionScreen)
 
 
 async def test_app_dry_run_toggle(tmp_path):
     app = MacCleanupApp(config_path=tmp_path / ".mac_cleanup_py")
     async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
         screen = app.screen
         assert isinstance(screen, SelectionScreen)
         assert screen.dry_run is False
@@ -144,6 +178,7 @@ async def test_app_dry_run_toggle(tmp_path):
 async def test_app_quit_from_selection(tmp_path):
     app = MacCleanupApp(config_path=tmp_path / ".mac_cleanup_py")
     async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
         await pilot.press("q")
     # App exited cleanly — no exception raised
 
