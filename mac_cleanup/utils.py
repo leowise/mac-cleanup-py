@@ -93,8 +93,10 @@ def _is_command_allowed(command: str) -> bool:
         "type",
         # System utilities
         "osascript", "xcrun", "defaults", "killall", "launchctl",
+        "ps", "grep",  # used in default_modules (e.g. ps aux | grep '[T]elegram')
         # Development tools
         "brew", "npm", "yarn", "pnpm", "pip", "python", "ruby", "gem",
+        "docker", "bun", "composer", "go", "pod", "poetry",
         # File operations (limited)
         "rm", "mv", "cp", "mkdir", "chmod", "chown",
         # Archive operations
