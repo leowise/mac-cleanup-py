@@ -20,8 +20,11 @@ def get_parser_actions() -> list[Action]:
 
     action_list = parser._actions  # noqa
 
-    # Remove help action from the list
-    return action_list[1:]
+    # Keep flag actions only (exclude help and subparsers positional)
+    return [
+        action for action in action_list
+        if action.option_strings and action.option_strings[0] != "-h"
+    ]
 
 
 class TestParser:
@@ -43,11 +46,12 @@ class TestParser:
     def test_actions_empty(self, get_namespace: Args):
         """Test parser without args."""
 
-        # Set empty args to parser
-        parser.parse_args(namespace=get_namespace)
+        # Set empty args to parser (pass args=[] to avoid reading sys.argv during tests)
+        parser.parse_args(args=[], namespace=get_namespace)
 
         # Check there is no attrs
-        assert not any(getattr(get_namespace, attr) for attr in self.get_all_args_from_namespace(get_namespace))
+        attrs_to_check = [attr for attr in self.get_all_args_from_namespace(get_namespace) if attr != "command"]
+        assert not any(getattr(get_namespace, attr) for attr in attrs_to_check)
 
     @pytest.mark.parametrize(
         "is_short_name",
@@ -66,5 +70,6 @@ class TestParser:
         # Add actions to parser
         parser.parse_args(args=action_list, namespace=get_namespace)
 
-        # Check all attrs are set
-        assert all(getattr(get_namespace, attr) for attr in self.get_all_args_from_namespace(get_namespace))
+        # Check all flag attrs are set (exclude command which stays None when using flags directly)
+        attrs_to_check = [attr for attr in self.get_all_args_from_namespace(get_namespace) if attr != "command"]
+        assert all(getattr(get_namespace, attr) for attr in attrs_to_check)
