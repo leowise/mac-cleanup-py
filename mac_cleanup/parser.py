@@ -130,12 +130,13 @@ parser.add_argument(
 
 args = Args()
 
-# Wrap in try/except: subparsers cause parse_known_args to raise SystemExit
-# when pytest passes test file paths as positional args.
+# Only swallow exit code 2 (argparse parse errors from pytest passing test paths
+# as positional args). Code 0 exits (--help, --version) must propagate normally.
 try:
     parser.parse_known_args(namespace=args)
-except SystemExit:
-    pass
+except SystemExit as e:
+    if e.code != 2:
+        raise
 
 # args.dry_run = True  # debug
 # args.configure = True  # debug

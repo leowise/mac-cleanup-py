@@ -89,6 +89,8 @@ def _is_command_allowed(command: str) -> bool:
     """
     # Define allowed commands and patterns
     allowed_commands = {
+        # Shell built-ins used for existence checks in default modules
+        "type",
         # System utilities
         "osascript", "xcrun", "defaults", "killall", "launchctl",
         # Development tools
