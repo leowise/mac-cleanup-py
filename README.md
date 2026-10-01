@@ -121,8 +121,23 @@ options:
   -p, --custom-path  Specify path for custom modules
   -f, --force        Accept all warnings
   -v, --verbose      Print folders to be deleted
+  -r, --restore      Restore files from a backup
 
 ```
+
+### Non-interactive configuration
+
+Automation can provide configuration without opening prompts:
+
+- `MAC_CLEANUP_CONFIG` points to a configuration file.
+- `MAC_CLEANUP_ENABLED_MODULES` is a comma-separated list of enabled modules.
+- `MAC_CLEANUP_CUSTOM_PATH` sets the custom module directory.
+
+Cleanup paths are restricted to the configured safe-path whitelist. Unscoped
+wildcards and critical system or user-document paths are rejected. Permanent
+deletions create a timestamped backup before execution; `mac-cleanup restore`
+restores a selected backup only into a directory with no conflicting entries.
+Restoration rejects unsafe archive paths and links.
 
 ## 🌟 Contributing
 

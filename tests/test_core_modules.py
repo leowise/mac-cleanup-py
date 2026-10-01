@@ -10,6 +10,7 @@ from _pytest.monkeypatch import MonkeyPatch
 
 from mac_cleanup import args
 from mac_cleanup.core_modules import Command, Path
+from mac_cleanup.operation import OperationStatus
 
 
 class TestCommand:
@@ -223,6 +224,7 @@ class TestPath:
             try:
                 # Check file doesn't exist
                 assert not tmp_path.exists()
+                assert path.operation_status is OperationStatus.COMPLETED
             except AssertionError as err:
                 # Remove temp file on error
                 if is_file:

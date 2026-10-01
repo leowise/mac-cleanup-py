@@ -8,6 +8,7 @@ from _pytest.logging import LogCaptureFixture
 
 from mac_cleanup.error_handling import _exception  # noqa
 from mac_cleanup.error_handling import catch_exception
+from mac_cleanup.errors import CommandTimeoutError
 
 
 class TestErrorHandler:
@@ -125,6 +126,20 @@ class TestErrorHandler:
 
         # Check correct logger output
         assert captured_log == ""
+
+    def test_custom_error_includes_recovery_guidance(self, capsys: CaptureFixture[str]):
+        """Application errors provide actionable recovery feedback."""
+
+        @catch_exception(exit_on_exception=False)
+        def failing_operation() -> None:
+            raise CommandTimeoutError("cleanup command timed out")
+
+        failing_operation()
+
+        output = capsys.readouterr().out
+        assert "Recovery" in output
+        assert "smaller batches" in output
+        assert "Exiting..." in output
 
     @pytest.mark.parametrize("exit_code", [0, 1])
     def test_exit_raised(self, exit_code: int, capsys: CaptureFixture[str], caplog: LogCaptureFixture):

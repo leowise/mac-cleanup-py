@@ -2,6 +2,7 @@
 
 import ast
 import importlib.util
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from beartype import beartype  # pyright: ignore [reportUnknownVariableType]
@@ -55,8 +56,13 @@ class CustomModuleValidator:
         self.errors.clear()
 
         try:
+            module_path = Path(file_path)
+            if not module_path.is_file() or module_path.is_symlink():
+                self.errors.append(f"Custom module must be a regular, non-symlink file: {file_path}")
+                return False
+
             # Parse the AST
-            with open(file_path, "r", encoding="utf-8") as f:
+            with module_path.open("r", encoding="utf-8") as f:
                 source_code = f.read()
 
             tree = ast.parse(source_code, filename=file_path)
@@ -119,10 +125,12 @@ class ASTSecurityAnalyzer(ast.NodeVisitor):
         for alias in node.names:
             module_name = alias.name.split(".")[0]
             self.imported_modules.add(module_name)
+            if alias.asname:
+                self.imported_modules.add(alias.asname)
 
             if (module_name in CustomModuleValidator.DANGEROUS_IMPORTS and
                 module_name not in CustomModuleValidator.ALLOWED_IMPORTS):
-                self.warnings.append(f"Dangerous import detected: {module_name}")
+                self.errors.append(f"Dangerous import detected: {module_name}")
 
         self.generic_visit(node)
 
@@ -134,7 +142,7 @@ class ASTSecurityAnalyzer(ast.NodeVisitor):
 
             if (module_name in CustomModuleValidator.DANGEROUS_IMPORTS and
                 module_name not in CustomModuleValidator.ALLOWED_IMPORTS):
-                self.warnings.append(f"Dangerous import from {module_name}")
+                self.errors.append(f"Dangerous import from {module_name}")
 
         self.generic_visit(node)
 
@@ -148,14 +156,14 @@ class ASTSecurityAnalyzer(ast.NodeVisitor):
                 self.errors.append(f"Dangerous function call: {func_name}()")
 
         elif isinstance(node.func, ast.Attribute):
-            # Handle method calls like os.system()
+            # Handle method calls like os.system(), including aliases.
             if isinstance(node.func.value, ast.Name):
                 module_name = node.func.value.id
                 method_name = node.func.attr
 
                 if module_name in self.imported_modules:
                     full_call = f"{module_name}.{method_name}"
-                    if full_call in ["os.system", "subprocess.call", "subprocess.run"]:
+                    if method_name in {"system", "popen", "spawn", "call", "run", "Popen"}:
                         self.errors.append(f"Dangerous system call: {full_call}()")
 
         self.generic_visit(node)

@@ -4,7 +4,7 @@ from beartype import beartype  # pyright: ignore [reportUnknownVariableType]
 
 
 @beartype
-def cmd(command: str, *, ignore_errors: bool = True, timeout: int = 30, validate_command: bool = True) -> str:
+def cmd(command: str, *, ignore_errors: bool = True, timeout: int = 30, validate_command: bool = True) -> str:  # noqa: C901
     """
     Executes command in Popen with security enhancements.
 
@@ -17,11 +17,16 @@ def cmd(command: str, *, ignore_errors: bool = True, timeout: int = 30, validate
     import shlex
     from subprocess import TimeoutExpired
 
+    from mac_cleanup.errors import CommandError, CommandTimeoutError, CommandValidationError
+
+    if timeout <= 0:
+        raise CommandValidationError("timeout must be greater than zero")
+
     # Validate command if requested
     if validate_command and not _is_command_allowed(command):
         from mac_cleanup.logger import logger
         logger.log_operation(command, 0, "command_blocked", False)
-        raise ValueError(f"Command not allowed: {command}")
+        raise CommandValidationError(f"Command not allowed: {command}")
 
     # Sanitize command - prevent command injection by ensuring it's properly formed
     try:
@@ -32,9 +37,27 @@ def cmd(command: str, *, ignore_errors: bool = True, timeout: int = 30, validate
     except ValueError as e:
         from mac_cleanup.logger import logger
         logger.log_operation(command, 0, "command_parse_error", False)
-        raise ValueError(f"Invalid command format: {e}") from e
+        raise CommandValidationError(f"Invalid command format: {e}") from e
 
     from subprocess import DEVNULL, PIPE, Popen
+
+    # Translate the small redirection forms used by existing modules without
+    # invoking a shell. They are removed from argv and represented by Popen
+    # streams instead.
+    stderr_redirect = False
+    cleaned_command = []
+    skip_next = False
+    for token in parsed_command:
+        if skip_next:
+            skip_next = False
+            continue
+        if token in {">&2", "1>&2"}:
+            stderr_redirect = True
+            continue
+        if token in {">/dev/null", "1>/dev/null", "2>/dev/null", "2>&1"}:
+            continue
+        cleaned_command.append(token)
+    parsed_command = cleaned_command
 
     process = None
     try:
@@ -42,7 +65,7 @@ def cmd(command: str, *, ignore_errors: bool = True, timeout: int = 30, validate
         process = Popen(
             parsed_command,
             shell=False,  # Use shell=False for better security
-            stdout=PIPE,
+            stdout=(DEVNULL if stderr_redirect and ignore_errors else PIPE),
             stderr=(DEVNULL if ignore_errors else PIPE),
             text=True  # Get text output directly
         )
@@ -58,7 +81,9 @@ def cmd(command: str, *, ignore_errors: bool = True, timeout: int = 30, validate
         # Handle errors
         if not ignore_errors and process.returncode != 0:
             error_output = stderr or "Command failed"
-            raise RuntimeError(f"Command failed (exit code {process.returncode}): {error_output}")
+            raise CommandError(
+                f"Command failed (exit code {process.returncode}): {error_output}"
+            )
 
         # Return combined output
         output = stdout or ""
@@ -73,11 +98,13 @@ def cmd(command: str, *, ignore_errors: bool = True, timeout: int = 30, validate
         # Kill the process if it times out
         if process:
             process.kill()
-        raise TimeoutError(f"Command timed out after {timeout} seconds: {command}") from e
+        raise CommandTimeoutError(f"Command timed out after {timeout} seconds: {command}", cause=e) from e
+    except (CommandError, CommandTimeoutError):
+        raise
     except Exception as e:
         from mac_cleanup.logger import logger
         logger.log_operation(command, 0, "command_error", False)
-        raise RuntimeError(f"Command execution failed: {e}") from e
+        raise CommandError(f"Command execution failed: {e}", cause=e) from e
 
 
 def _is_command_allowed(command: str) -> bool:
@@ -90,7 +117,7 @@ def _is_command_allowed(command: str) -> bool:
     # Define allowed commands and patterns
     allowed_commands = {
         # Shell built-ins used for existence checks in default modules
-        "type",
+        "type", "echo", "sleep",
         # System utilities
         "osascript", "xcrun", "defaults", "killall", "launchctl",
         "ps", "grep",  # used in default_modules (e.g. ps aux | grep '[T]elegram')
@@ -125,26 +152,30 @@ def _is_command_allowed(command: str) -> bool:
         if not parsed:
             return False
 
-        base_command = parsed[0]
-
-        # Check if command is in dangerous list
-        if base_command in dangerous_commands:
+        # shell=False means operators are not interpreted.  Reject operators that
+        # could hide a second command, while retaining the pipe/redirection syntax
+        # used by existing default modules as inert arguments.
+        if any(token in {";", "&&", "||", "`", "$(", "${"} for token in parsed):
             return False
 
-        # Check if command is in allowed list or is a full path to allowed command
-        if base_command in allowed_commands:
-            return True
+        def executable_allowed(value: str) -> bool:
+            if value.startswith("/"):
+                resolved = Path(value).resolve()
+                allowed_directories = {"/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/sbin"}
+                if resolved.parent.as_posix() not in allowed_directories:
+                    return False
+                value = resolved.name
+            if value in dangerous_commands:
+                return False
+            return value in allowed_commands
 
-        # Allow full paths to system binaries
-        allowed_paths = ["/bin/", "/usr/bin/", "/sbin/"]
-        if any(base_command.startswith(path) for path in allowed_paths):
-            allowed_basename = base_command.split("/")[-1]
-            return allowed_basename in allowed_commands
+        # Validate the first executable and any executable following a pipeline.
+        # Other tokens are arguments and are never interpreted by Popen.
+        command_positions = [0]
+        command_positions.extend(i + 1 for i, token in enumerate(parsed[:-1]) if token == "|")
+        return all(pos < len(parsed) and executable_allowed(parsed[pos]) for pos in command_positions)
 
-        return False
-
-    except ValueError:
-        # If command can't be parsed, reject it
+    except (ValueError, OSError):
         return False
 
 
@@ -206,14 +237,10 @@ def check_deletable(path: Path | str) -> bool:
     if path_posix == ".":
         return False
 
-    # If glob return True (it'll delete nothing at the end, hard to handle otherwise)
-    if "*" in path_posix:
-        return True
-
     from mac_cleanup.path_validator import path_validator
 
     # Use the new path validator for comprehensive security checks
-    validation_result = path_validator.validate_path(path, check_size=False)
+    validation_result = path_validator.validate_path(path, check_size=True)
 
     # Path is deletable if it's valid (allowed and not blocked)
     return validation_result.get("valid", False)

@@ -1,5 +1,6 @@
 """Enhanced path validation with whitelist approach and size limits."""
 
+import fnmatch
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Set, Union
@@ -110,9 +111,20 @@ class PathValidator:
         if isinstance(path, str):
             path = Path(path)
 
-        # Expand user directory
+        # Expand and normalize before applying either the blocklist or whitelist.
         expanded_path = path.expanduser()
-        original_path_str = path.as_posix()
+        lexical_path_str = expanded_path.as_posix()
+        original_path_str = lexical_path_str
+        has_glob = any(char in original_path_str for char in "*?[")
+        if not has_glob:
+            expanded_path = expanded_path.resolve(strict=False)
+        else:
+            # Resolve the non-pattern portion so a symlink cannot bypass the list.
+            prefix = original_path_str
+            wildcard_index = min((prefix.find(char) for char in "*?[" if prefix.find(char) >= 0), default=len(prefix))
+            wildcard_prefix = prefix[:wildcard_index]
+            parent = Path(wildcard_prefix or ".").resolve(strict=False)
+            original_path_str = (parent / prefix[wildcard_index:]).as_posix()
 
         result: Dict[str, Any] = {
             "valid": False,
@@ -121,13 +133,16 @@ class PathValidator:
             "size_info": None
         }
 
-        # Check if original path is in blocked list (blocked paths are expanded)
-        if self._is_blocked_path(original_path_str):
-            result["reason"] = f"Path is in critical system areas: {original_path_str}"
+        # Block critical paths before checking the whitelist. Keep the lexical
+        # spelling so safe aliases such as /tmp are not mistaken for /private.
+        if self._is_blocked_path(lexical_path_str):
+            result["reason"] = f"Path is in critical system areas: {lexical_path_str}"
             return result
 
-        # For cleanup operations, allow paths that are not blocked
-        # (The allowed paths are for additional safety but not strictly required)
+        if not self._is_allowed_path(original_path_str):
+            result["reason"] = f"Path is outside the cleanup whitelist: {original_path_str}"
+            return result
+
         result["valid"] = True
 
         # Check size limits if requested
@@ -151,9 +166,15 @@ class PathValidator:
 
     def _is_blocked_path(self, path_str: str) -> bool:
         """Check if path is in the blocked list."""
-        # Exact matches or prefix matches
-        return any(path_str.startswith(blocked + "/") or path_str == blocked
-                  for blocked in self.blocked_paths)
+        for blocked in self.blocked_paths:
+            if not (path_str.startswith(blocked + "/") or path_str == blocked):
+                continue
+            # /private contains explicitly approved temporary/log subtrees;
+            # retain the broad block for everything else.
+            if blocked == "/private" and path_str != blocked and self._is_allowed_path(path_str):
+                continue
+            return True
+        return False
 
     def _is_allowed_path(self, path_str: str) -> bool:
         """Check if path is in the allowed list."""
@@ -166,15 +187,17 @@ class PathValidator:
         return any(self._matches_pattern(path_str, allowed) for allowed in self.allowed_paths)
 
     def _matches_pattern(self, path_str: str, pattern: str) -> bool:
-        """Check if path matches a pattern (supports wildcards)."""
-        # For now, simple prefix matching with wildcards
-        if "*" in pattern:
-            # Convert glob pattern to prefix match
-            prefix = pattern.split("*")[0]
-            return path_str.startswith(prefix)
-        else:
-            # Exact match or prefix match
-            return path_str.startswith(pattern + "/") or path_str == pattern
+        """Check a normalized path against an allowlist pattern safely."""
+        pattern = Path(pattern).expanduser().as_posix()
+        if any(char in pattern for char in "*?["):
+            prefix, suffix = pattern.split("*", 1)
+            canonical_prefix = Path(prefix).resolve(strict=False).as_posix()
+            pattern = canonical_prefix + "*" + suffix
+            candidate = Path(path_str).resolve(strict=False).as_posix()
+            return fnmatch.fnmatchcase(candidate, pattern)
+        canonical_pattern = Path(pattern).resolve(strict=False).as_posix()
+        candidate = Path(path_str).resolve(strict=False).as_posix()
+        return candidate == canonical_pattern or candidate.startswith(canonical_pattern.rstrip("/") + "/")
 
     def _check_size_limits(self, path: Path) -> Dict[str, Any]:
         """Check size limits for a path."""

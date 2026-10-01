@@ -14,7 +14,11 @@ class EntryPoint:
     base_collector: _Collector
 
     def __init__(self):
-        if (config_home := environ.get("XDG_CONFIG_HOME")) is not None:
+        # An explicit path makes scripted and CI runs independent of the
+        # interactive configuration screen.
+        if config_path := environ.get("MAC_CLEANUP_CONFIG"):
+            self.config_path = Path(config_path).expanduser()
+        elif (config_home := environ.get("XDG_CONFIG_HOME")) is not None:
             self.config_path = Path(config_home).expanduser().joinpath("mac_cleanup_py").joinpath("config.toml")
         else:
             self.config_path = Path.home().joinpath(".mac_cleanup_py")
@@ -220,7 +224,8 @@ class EntryPoint:
                      f"Estimated space to recover: [success]{freed_space}[/success]\n"
                      f"Total items analyzed: [info]{len(list(self.base_collector._extract_paths()))}[/info]\n\n"
                      f"[{security_status}]{security_icon} Security Status:[/{security_status}]\n"
-                     f"• Safe operations: [success]{len(list(self.base_collector._extract_paths())) - blocked_paths}[/success]\n"
+                     f"• Safe operations: [success]"
+                     f"{len(list(self.base_collector._extract_paths())) - blocked_paths}[/success]\n"
                      f"• Blocked for safety: [warning]{blocked_paths}[/warning]",
                 title="[info]Dry Run Complete"
             )

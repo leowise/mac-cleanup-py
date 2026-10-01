@@ -112,26 +112,26 @@ def test_check_exists(path: Path | str | int, output: bool, expand_path: bool):
 @pytest.mark.parametrize(
     ("path", "output"),
     [
-        # test deletable str path
-        ("/", True),
+        # critical system root is not an allowed cleanup target
+        ("/", False),
         # test empty str path
         ("", False),
-        # test Glob in str path
-        ("*", True),
-        # test deletable Path
-        (Path("/"), True),
+        # unscoped glob is not an allowed cleanup target
+        ("*", False),
+        # test critical system root Path
+        (Path("/"), False),
         # test empty Path
         (Path(""), False),
-        # test Glob in Path
-        (Path("*"), True),
+        # test unscoped Glob in Path
+        (Path("*"), False),
         # test SIP
         ("/System", False),
         (Path("/System"), False),
-        # test no expand user
-        ("~/Documents", True),
+        # user documents are outside the cleanup whitelist
+        ("~/Documents", False),
         (Path("~/Documents").expanduser(), False),
-        # test custom rules
-        (Path("~/Documents"), True),
+        # custom rules still protect user documents by default
+        (Path("~/Documents"), False),
         # test beartype
         (123, False),
     ],

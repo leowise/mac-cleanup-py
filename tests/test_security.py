@@ -115,12 +115,12 @@ class TestPathSecurity:
         """Test that glob patterns are allowed."""
         from mac_cleanup.utils import check_deletable
 
-        glob_patterns = [
-            "*", "~/Library/Caches/*", "/tmp/*"
-        ]
+        allowed_glob_patterns = ["~/Library/Caches/*", "/tmp/*"]
 
-        for pattern in glob_patterns:
+        for pattern in allowed_glob_patterns:
             assert check_deletable(pattern), f"Glob pattern {pattern} should be allowed"
+
+        assert not check_deletable("*"), "Unscoped glob patterns must be rejected"
 
     def test_empty_path_blocked(self):
         """Test that empty paths are blocked."""

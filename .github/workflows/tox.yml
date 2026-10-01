@@ -35,3 +35,19 @@ jobs:
           pip install tox tox-gh-actions
       - name: Tests with Tox
         run: tox
+
+  dependency-audit:
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip poetry pip-audit
+          poetry install --only main --no-root
+      - name: Audit installed dependencies
+        run: pip-audit

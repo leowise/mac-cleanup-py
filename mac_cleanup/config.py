@@ -1,6 +1,7 @@
 """Config handler."""
 
 from inspect import getmembers, isfunction
+from os import environ
 from pathlib import Path
 from typing import Callable, Final, Optional, TypedDict, final
 
@@ -49,8 +50,15 @@ class Config:
             # Launch configuration
             self.__configure(all_modules=list(self.__modules.keys()), enabled_modules=list())
 
-        # Get custom modules path
-        self.__custom_modules_path: Optional[str] = self.__config_data.get("custom_path")
+        # Permit a fully configured non-interactive run without changing the
+        # TOML format used by existing installations.
+        env_enabled = environ.get("MAC_CLEANUP_ENABLED_MODULES")
+        if env_enabled and not self.__config_data.get("enabled"):
+            self.__config_data["enabled"] = [name.strip() for name in env_enabled.split(",") if name.strip()]
+            self.__write()
+
+        env_custom_path = environ.get("MAC_CLEANUP_CUSTOM_PATH")
+        self.__custom_modules_path: Optional[str] = env_custom_path or self.__config_data.get("custom_path")
 
         # Load custom modules
         self.__load_custom()

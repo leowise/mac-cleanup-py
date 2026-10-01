@@ -77,7 +77,7 @@ class TestEntryPoint:
 
         # Create EntryPoint and mock it
         mock_entry_point = EntryPoint()
-        monkeypatch.setattr(EntryPoint, "__new__", lambda: mock_entry_point)
+        monkeypatch.setattr(EntryPoint, "__new__", lambda cls: mock_entry_point)
 
         # Simulate count_free_space results
         monkeypatch.setattr(EntryPoint, "count_free_space", dummy_count_free_space)
@@ -137,7 +137,7 @@ class TestEntryPoint:
 
         # Create EntryPoint and mock it
         mock_entry_point = EntryPoint()
-        monkeypatch.setattr(EntryPoint, "__new__", lambda: mock_entry_point)
+        monkeypatch.setattr(EntryPoint, "__new__", lambda cls: mock_entry_point)
 
         # Simulate _extract_paths with predefined result
         monkeypatch.setattr(mock_entry_point.base_collector, "_extract_paths", dummy_extract_paths)
@@ -201,7 +201,7 @@ class TestEntryPoint:
 
         # Create EntryPoint and mock it
         mock_entry_point = EntryPoint()
-        monkeypatch.setattr(EntryPoint, "__new__", lambda: mock_entry_point)
+        monkeypatch.setattr(EntryPoint, "__new__", lambda cls: mock_entry_point)
 
         # Simulate _extract_paths with predefined result
         monkeypatch.setattr(mock_entry_point.base_collector, "_extract_paths", dummy_extract_paths)

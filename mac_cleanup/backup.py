@@ -93,11 +93,35 @@ class BackupManager:
         if not backup_path.exists():
             return False
 
-        restore_dir = restore_dir or Path.cwd()
+        restore_dir = (restore_dir or Path.cwd()).expanduser().resolve()
+        if not restore_dir.is_dir():
+            return False
 
         try:
             with tarfile.open(backup_path, "r:gz") as tar:
-                tar.extractall(restore_dir)
+                members = tar.getmembers()
+                destinations: List[Path] = []
+                for member in members:
+                    # Backups must never be able to write outside the target
+                    # directory or materialize links/devices during restore.
+                    destination = (restore_dir / member.name).resolve()
+                    try:
+                        destination.relative_to(restore_dir)
+                    except ValueError:
+                        return False
+                    if member.issym() or member.islnk() or member.isdev():
+                        return False
+                    destinations.append(destination)
+
+                # Restore is intentionally non-destructive: callers must choose
+                # another directory if any archived item already exists.
+                if len(set(destinations)) != len(destinations) or any(
+                    destination.exists() for destination in destinations
+                ):
+                    return False
+
+                for member in members:
+                    tar.extract(member, path=restore_dir)
             return True
         except (OSError, IOError, tarfile.TarError):
             return False

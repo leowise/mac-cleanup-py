@@ -1,30 +1,3 @@
-"""Wrapper for handling all errors in entry point."""
-
-from functools import wraps
-from typing import Any, Callable, Iterable, Optional, Type, TypeVar, overload
-
-T = TypeVar("T", bound=Callable[..., Any])
-
-_iterable_exception = tuple[Type[BaseException]] | list[Type[BaseException]]
-_exception = Type[BaseException] | _iterable_exception
-
-
-class ErrorHandler:
-    """Decorator for catching exceptions and printing logs."""
-
-    def __init__(self, exception: Optional[_exception] = None, exit_on_exception: bool = False):
-        # Sets default exception (empty tuple) if none was provided
-        if exception is None:
-            self.exception: _iterable_exception = tuple[Type[BaseException]]()
-        # Changes exception class to tuple if it's class
-        elif not isinstance(exception, Iterable):
-            self.exception = (exception,)
-        else:
-            self.exception = exception
-
-        # Sets exit_on_exception
-        self.exit_on_exception = exit_on_exception
-
 """Enhanced error handling with user-friendly messages and recovery suggestions."""
 
 from functools import wraps
@@ -62,6 +35,7 @@ class ErrorHandler:
 
                 # Print exit message
                 console.print("\n[warning]Operation cancelled by user.")
+                console.print("\nExiting...\n")
 
                 # Exit if prompted
                 if self.exit_on_exception:
@@ -74,6 +48,8 @@ class ErrorHandler:
                 # Clause for not expected error
                 if type(err) not in self.exception:
                     self._handle_unexpected_error(err)
+                else:
+                    return None
 
         return wrapper
 
@@ -84,8 +60,16 @@ class ErrorHandler:
         error_type = type(err).__name__
         error_message = str(err)
 
-        # Categorize errors and provide user-friendly messages
-        if "Permission" in error_type or "permission" in error_message.lower():
+        # Prefer structured recovery guidance from application exceptions.
+        if hasattr(err, "recovery_message"):
+            print_panel(
+                text=f"[danger]{err.user_message}[/danger]\n\n"
+                     f"[dim]{error_message}[/dim]\n\n"
+                     f"[info]💡 Recovery:[/info] {err.recovery_hint}",
+                title="[danger]Cleanup Error",
+            )
+        # Categorize legacy and third-party errors by type/message.
+        elif "Permission" in error_type or "permission" in error_message.lower():
             self._handle_permission_error(error_message)
         elif "FileNotFound" in error_type or "No such file" in error_message:
             self._handle_file_not_found_error(error_message)
@@ -97,6 +81,8 @@ class ErrorHandler:
             self._handle_security_error(error_message)
         else:
             self._handle_generic_error(err, error_type, error_message)
+
+        console.print("\nExiting...\n")
 
         # Exit if prompted
         if self.exit_on_exception:
@@ -177,7 +163,7 @@ class ErrorHandler:
         """Handle generic/unexpected errors."""
         from logging import basicConfig, getLogger
         from rich.logging import RichHandler
-        from mac_cleanup.console import console, print_panel
+        from mac_cleanup.console import print_panel
 
         # Set logger config for detailed error reporting
         basicConfig(

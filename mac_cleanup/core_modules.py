@@ -7,6 +7,7 @@ from typing import Final, Optional, TypeVar, final
 from beartype import beartype  # pyright: ignore [reportUnknownVariableType]
 
 from mac_cleanup import args
+from mac_cleanup.operation import OperationStatus
 from mac_cleanup.progress import ProgressBar
 from mac_cleanup.utils import check_deletable, check_exists, cmd
 
@@ -120,6 +121,7 @@ class Path(_BaseCommand):
     @beartype
     def __init__(self, path: str):
         self.__path: Final[Path_] = Path_(path).expanduser()
+        self.__operation_status = OperationStatus.PENDING
 
         # Use trash command if safe-delete is enabled
         if args.safe_delete:
@@ -140,6 +142,12 @@ class Path(_BaseCommand):
 
         return self.__path
 
+    @property
+    def operation_status(self) -> OperationStatus:
+        """Return the latest state of this cleanup operation."""
+
+        return self.__operation_status
+
     def dry_run_only(self) -> "Path":
         """Set module to only count size in dry runs :return: :class:`Path`"""
 
@@ -148,15 +156,20 @@ class Path(_BaseCommand):
         return self
 
     def _execute(self, ignore_errors: bool = True) -> Optional[str]:
-        """Delete specified path :return: Command execution results based on specified
-        parameters.
-        """
+        """Delete specified path and retain a resumable operation status."""
+
+        # Cleanup runs can safely be retried: completed or skipped paths are
+        # terminal and must not prompt or execute a second time.
+        if self.__operation_status.terminal:
+            return None
 
         if self.__dry_run_only:
+            self.__operation_status = OperationStatus.SKIPPED
             return
 
         # Skip if path is not deletable or undefined
         if not all([check_deletable(path=self.__path), check_exists(path=self.__path, expand_user=False)]):
+            self.__operation_status = OperationStatus.SKIPPED
             return
 
         # Calculate size for confirmation prompt
@@ -178,7 +191,8 @@ class Path(_BaseCommand):
                 prompt_text=prompt_text,
                 prompt_title="[danger]⚠️  DELETION CONFIRMATION REQUIRED"
             ):
-                return  # User cancelled
+                self.__operation_status = OperationStatus.SKIPPED
+                return
 
         # Create backup before deletion (unless safe_delete is used, since trash is recoverable)
         backup_path = None
@@ -186,8 +200,13 @@ class Path(_BaseCommand):
             from mac_cleanup.backup import backup_manager
             backup_path = backup_manager.create_backup(self.__path)
 
-        # Execute the command
-        result = super()._execute(ignore_errors=ignore_errors)
+        # Execute the command. Keep failures retryable while exposing the
+        # failure to the caller and progress reporting.
+        try:
+            result = super()._execute(ignore_errors=ignore_errors)
+        except Exception:
+            self.__operation_status = OperationStatus.FAILED
+            raise
 
         # Log the operation
         from mac_cleanup.logger import logger
@@ -197,6 +216,13 @@ class Path(_BaseCommand):
 
         # Log backup creation if it was created
         if backup_path:
+            self.__operation_status = OperationStatus.BACKED_UP
             logger.log_operation(str(backup_path), size, "backup_created", True)
 
+        # A successful command removes the target (or hands it to Trash).
+        self.__operation_status = (
+            OperationStatus.COMPLETED
+            if not self.__path.exists() or args.safe_delete
+            else OperationStatus.FAILED
+        )
         return result

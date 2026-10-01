@@ -9,7 +9,19 @@ except ImportError:  # pragma: no cover
     __version__ = "source"
 
 def main() -> None:
-    if args.command in (None, "ui"):
+    legacy_cli_requested = any(
+        (
+            args.dry_run,
+            args.update,
+            args.configure,
+            args.custom_path,
+            args.force,
+            args.verbose,
+            args.safe_delete,
+            args.restore,
+        )
+    )
+    if args.command == "ui" or (args.command is None and not legacy_cli_requested):
         from mac_cleanup.tui.app import MacCleanupApp
 
         MacCleanupApp().run()
