@@ -1,5 +1,6 @@
 """All tests for mac_cleanup_py.config."""
 
+import shlex
 import tempfile
 from pathlib import Path as Pathlib
 from typing import IO, Callable, Optional, cast
@@ -145,7 +146,7 @@ class TestPath:
             assert path.get_path.as_posix() == tmp_path_posix
 
             # Check command
-            assert path.get_command == f"rm -rf '{tmp_path_posix}'"  # noqa
+            assert path.get_command == f"rm -rf -- {shlex.quote(str(tmp_path_posix))}"  # noqa
 
     def test_init_expanduser(self):
         """Test expand user in :class:`mac_cleanup.core_modules.Path`"""
@@ -160,7 +161,7 @@ class TestPath:
         assert path.get_path.as_posix() == tmp_path_posix.expanduser().as_posix()
 
         # Check command
-        assert path.get_command == f"rm -rf '{tmp_path_posix.expanduser().as_posix()}'"  # noqa
+        assert path.get_command == f"rm -rf -- {shlex.quote(tmp_path_posix.expanduser().as_posix())}"  # noqa
 
     @pytest.mark.parametrize("is_file", [True, False])
     def test_dry_run_only(self, is_file: bool):

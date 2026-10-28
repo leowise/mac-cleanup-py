@@ -255,3 +255,32 @@ def test_restore_root_is_the_literal_directory_before_the_first_wildcard(tmp_pat
     assert root(Path("/a/b/[!x]*")) == Path("/a/b")
     assert root(Path("/a/b/file")) == Path("/a/b")
     assert root(Path("/*.hprof")) == Path("/")
+
+
+@pytest.mark.parametrize("name", ["x' 'VICTIM", "x' '-rf' 'VICTIM", "x' 'VICTIM' '", 'x" VICTIM', "x; VICTIM"])
+def test_hostile_file_names_cannot_inject_arguments(
+    isolated_state: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """A file name must never become extra rm arguments (relative ones resolve against the cwd)."""
+    cwd = isolated_state / "cwd"
+    cwd.mkdir()
+    victim = cwd / "VICTIM"
+    victim.write_text("keep")
+    monkeypatch.chdir(cwd)
+
+    base = isolated_state / "cache"
+    base.mkdir()
+    (base / name).write_text("x")
+
+    try:
+        CleanupPath(str(base / "*"))._execute()
+    finally:
+        assert victim.read_text() == "keep"
+    assert not (base / name).exists()
+
+
+def test_safe_delete_command_passes_path_as_an_argument(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(f"{MODULE}.args.safe_delete", True)
+    command = CleanupPath._delete_command(Path('/tmp/a" & quit & "b'))
+    assert "on run argv" in command
+    assert '/tmp/a" & quit & "b' not in command.replace("'/tmp/a\" & quit & \"b'", "")

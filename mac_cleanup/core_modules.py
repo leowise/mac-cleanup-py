@@ -129,14 +129,24 @@ class Path(_BaseCommand):
 
     @staticmethod
     def _delete_command(path: Path_) -> str:
-        """Command removing ``path``: Finder trash with safe-delete, otherwise rm -rf."""
+        """
+        Command removing ``path``: Finder trash with safe-delete, otherwise rm -rf.
+
+        The command string is split with shlex and run without a shell, so the path is
+        always quoted as a single argument. It is never interpolated into the AppleScript
+        source: Finder receives it as ``argv`` instead.
+        """
+
+        from shlex import quote
 
         if args.safe_delete:
-            # Use osascript to move to trash (safer than rm -rf)
-            return "osascript -e 'tell application \"Finder\" to delete " f"POSIX file \"{path.as_posix()}\"'"
+            return (
+                "osascript -e 'on run argv' "
+                "-e 'tell application \"Finder\" to delete (POSIX file (item 1 of argv))' "
+                f"-e 'end run' {quote(path.as_posix())}"
+            )
 
-        # Use rm -rf for permanent deletion
-        return f"rm -rf '{path.as_posix()}'"
+        return f"rm -rf -- {quote(path.as_posix())}"
 
     @property
     def get_path(self) -> Path_:
