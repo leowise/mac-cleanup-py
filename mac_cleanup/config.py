@@ -9,8 +9,14 @@ from mac_cleanup import default_modules
 from mac_cleanup.console import console
 
 
+class _ConfigFileOptional(TypedDict, total=False):
+    """Optional config file keys."""
+
+    backup_retention: int
+
+
 @final
-class ConfigFile(TypedDict):
+class ConfigFile(_ConfigFileOptional):
     """Config file structure."""
 
     enabled: list[str]
@@ -49,6 +55,13 @@ class Config:
 
             # Launch configuration
             self.__configure(all_modules=list(self.__modules.keys()), enabled_modules=list())
+
+        # Apply configured backup retention (MAC_CLEANUP_BACKUP_RETENTION still overrides it)
+        retention = self.__config_data.get("backup_retention")
+        if isinstance(retention, int) and retention >= 1:
+            from mac_cleanup.backup import backup_manager
+
+            backup_manager.retention = retention
 
         # Permit a fully configured non-interactive run without changing the
         # TOML format used by existing installations.

@@ -1,5 +1,6 @@
 """Backup module for mac_cleanup operations."""
 
+import os
 import tarfile
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +10,10 @@ from mac_cleanup.logger import logger
 from mac_cleanup.utils import bytes_to_human
 
 
+DEFAULT_RETENTION = 10
+_RUN_SEPARATOR = "__"
+
+
 class BackupManager:
     """Manager for creating and managing backups."""
 
@@ -16,6 +21,25 @@ class BackupManager:
         # Create backup directory
         self._backup_dir = Path.home() / ".mac_cleanup_backups"
         self._backup_dir.mkdir(exist_ok=True)
+
+        # Backups made by one process share a run id; retention counts runs
+        self._run_id = f"run{datetime.now().strftime('%Y%m%d%H%M%S')}{os.getpid()}"
+        self._retention = DEFAULT_RETENTION
+
+    @property
+    def retention(self) -> int:
+        """Number of cleanup runs whose backups are kept (env var overrides the configured value)."""
+        try:
+            from_env = int(os.environ.get("MAC_CLEANUP_BACKUP_RETENTION", ""))
+        except ValueError:
+            return self._retention
+        return from_env if from_env >= 1 else self._retention
+
+    @retention.setter
+    def retention(self, value: int) -> None:
+        if value < 1:
+            raise ValueError("Backup retention must be at least 1")
+        self._retention = value
 
     def create_backup(self, path: Path, description: str = "") -> Optional[Path]:
         """
@@ -31,7 +55,7 @@ class BackupManager:
         # Generate backup filename with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_name = str(path).replace("/", "_").replace("\\", "_").lstrip("_")
-        backup_name = f"{safe_name}_{timestamp}.tar.gz"
+        backup_name = f"{self._run_id}{_RUN_SEPARATOR}{safe_name}_{timestamp}.tar.gz"
         backup_path = self._backup_dir / backup_name
 
         try:
@@ -41,6 +65,7 @@ class BackupManager:
                 # Use relative path in archive to avoid absolute path issues
                 tar.add(path, arcname=path.name)
 
+            self.cleanup_old_backups()
             return backup_path
 
         except (OSError, IOError):
@@ -126,25 +151,41 @@ class BackupManager:
         except (OSError, IOError, tarfile.TarError):
             return False
 
-    def cleanup_old_backups(self, keep_count: int = 10) -> int:
-        """
-        Remove old backups, keeping only the most recent ones.
+    @staticmethod
+    def _run_key(backup_path: Path) -> str:
+        """Group key of a backup: its run id, or its own name for backups from before run ids."""
+        run_id, separator, _ = backup_path.name.partition(_RUN_SEPARATOR)
+        return run_id if separator else backup_path.name
 
-        :param keep_count: Number of backups to keep
+    def cleanup_old_backups(self, keep_count: Optional[int] = None) -> int:
+        """
+        Remove the backups of old runs, keeping the most recent ones.
+
+        A run is every backup made by one cleanup process, so a large run is never
+        pruned by its own backups. The current run is always kept.
+
+        :param keep_count: Number of runs to keep (defaults to the configured retention)
         :return: Number of backups removed
         """
-        backups = self.list_backups()
-        if len(backups) <= keep_count:
-            return 0
+        keep_count = max(keep_count if keep_count is not None else self.retention, 1)
 
-        # Remove old backups
+        # list_backups is newest first, so runs are ordered by their newest backup
+        runs: Dict[str, List[Path]] = {}
+        for backup in self.list_backups():
+            if backup.get("exists"):
+                runs.setdefault(self._run_key(backup["path"]), []).append(backup["path"])
+
+        keep = {self._run_id, *list(runs)[:keep_count]}
         removed_count = 0
-        for backup in backups[keep_count:]:
-            try:
-                backup["path"].unlink()
-                removed_count += 1
-            except OSError:
-                pass  # Ignore errors when cleaning up
+        for run_key, paths in runs.items():
+            if run_key in keep:
+                continue
+            for path in paths:
+                try:
+                    path.unlink()
+                    removed_count += 1
+                except OSError:
+                    pass  # Ignore errors when cleaning up
 
         return removed_count
 

@@ -136,7 +136,9 @@ Automation can provide configuration without opening prompts:
 
 Cleanup paths are restricted to the configured safe-path whitelist. Unscoped
 wildcards and critical system or user-document paths are rejected. Permanent
-deletions create a timestamped backup before execution; `mac-cleanup restore`
+deletions create a timestamped backup before execution, and the backups of the
+10 most recent runs are kept (set `backup_retention` in the config file or
+`MAC_CLEANUP_BACKUP_RETENTION`; the environment variable wins). `mac-cleanup restore`
 restores a selected backup only into a directory with no conflicting entries.
 Restoration rejects unsafe archive paths and links.
 
