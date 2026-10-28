@@ -4,13 +4,14 @@ import hashlib
 import os
 import shutil
 import tarfile
+from contextlib import suppress
 from datetime import datetime
 from glob import glob
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
 
 from mac_cleanup.logger import logger
-from mac_cleanup.utils import bytes_to_human
+from mac_cleanup.utils import bytes_to_human, ensure_private_dir
 
 
 DEFAULT_RETENTION = 10
@@ -24,8 +25,12 @@ class BackupManager:
 
     def __init__(self):
         # Create backup directory
+        # Backups can contain tokens and personal data, so only the owner may read them
         self._backup_dir = Path.home() / ".mac_cleanup_backups"
-        self._backup_dir.mkdir(exist_ok=True)
+        ensure_private_dir(self._backup_dir)
+        for existing in self._backup_dir.glob("*.tar.gz"):
+            with suppress(OSError):
+                existing.chmod(0o600)
 
         # Backups made by one process share a run id; retention counts runs
         self._run_id = f"run{datetime.now().strftime('%Y%m%d%H%M%S')}{os.getpid()}"
@@ -128,7 +133,9 @@ class BackupManager:
 
         try:
             # Create tar.gz archive with names relative to the restore root
-            with tarfile.open(backup_path, "w:gz") as tar:
+            # Created 0600 up front, so the archive is never readable by others, even briefly
+            fd = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as raw, tarfile.open(fileobj=raw, mode="w:gz") as tar:
                 for source, arcname in entries:
                     tar.add(source, arcname=arcname)
 

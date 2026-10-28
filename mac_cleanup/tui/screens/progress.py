@@ -86,6 +86,7 @@ class ProgressScreen(Screen[None]):
             dry_run=self._dry_run,
             on_start=on_start,
             on_complete=on_complete,
+            safe_delete=self._safe_delete,
         )
         self.post_message(CleanupDone(result=result))
 

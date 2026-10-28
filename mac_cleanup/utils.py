@@ -1,5 +1,6 @@
+import os
 from pathlib import Path
-from typing import Optional
+from typing import IO, Optional
 
 import attr
 from beartype import beartype  # pyright: ignore [reportUnknownVariableType]
@@ -17,6 +18,18 @@ _REDIRECTS = {
     "1>&2": (("stdout", "stderr"),),
 }
 _FORBIDDEN_TOKENS = {";", "||", "`", "$(", "${"}
+
+
+def ensure_private_dir(path: Path) -> None:
+    """Create ``path`` readable only by its owner, tightening it if it already exists."""
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(path, 0o700)
+
+
+def open_private(path: Path, mode: str = "a") -> IO[str]:
+    """Open a text file for writing or appending, creating it readable only by its owner."""
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if "a" in mode else os.O_TRUNC)
+    return os.fdopen(os.open(path, flags, 0o600), mode, encoding="utf-8")
 
 
 @attr.s(slots=True)

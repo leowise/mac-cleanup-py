@@ -227,3 +227,49 @@ def test_build_selections_sorted():
     )
     names = [str(s.prompt) for s in selections]
     assert names == sorted(names)
+
+
+async def test_runner_applies_safe_delete_and_restores_flags(tmp_path):
+    """The TUI's safe-delete choice must reach the engine, and flags must not leak afterwards."""
+    from mac_cleanup.parser import args
+
+    seen: list[tuple[bool, bool]] = []
+    before = (args.safe_delete, args.force)
+
+    def module():
+        seen.append((args.safe_delete, args.force))
+
+    with patch("mac_cleanup.tui.runner.statvfs") as mock_stat:
+        mock_stat.return_value = MagicMock(f_bavail=1000, f_frsize=4096)
+        runner = CleanupRunner(config_path=tmp_path / ".mac_cleanup_py", module_fns={"m": module})
+        await runner.run(
+            enabled_modules=["m"], dry_run=False, safe_delete=True, on_start=lambda _: None, on_complete=lambda _: None
+        )
+
+    # force: the user already confirmed on the summary screen, and rich prompts cannot run inside Textual
+    assert seen == [(True, True)]
+    assert (args.safe_delete, args.force) == before
+
+
+async def test_runner_reports_errors_from_individual_commands(tmp_path):
+    """A failing command inside a module is reported, not silently swallowed."""
+    from mac_cleanup.core import _Collector
+
+    completed: list[ModuleResult] = []
+
+    class Failing:
+        def _execute(self):
+            raise RuntimeError("rm failed")
+
+    def module():
+        _Collector()._execute_list.append(MagicMock(modules=[Failing()]))
+
+    with patch("mac_cleanup.tui.runner.statvfs") as mock_stat:
+        mock_stat.return_value = MagicMock(f_bavail=1000, f_frsize=4096)
+        runner = CleanupRunner(config_path=tmp_path / ".mac_cleanup_py", module_fns={"m": module})
+        await runner.run(
+            enabled_modules=["m"], dry_run=False, on_start=lambda _: None, on_complete=completed.append
+        )
+
+    assert completed[0].status == "error"
+    assert "rm failed" in (completed[0].error or "")

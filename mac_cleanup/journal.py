@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from mac_cleanup.operation import OperationStatus
+from mac_cleanup.utils import ensure_private_dir, open_private
 
 MAX_LINES = 1000
 
@@ -35,8 +36,8 @@ class OperationJournal:
             "backup": backup,
         }
         with suppress(OSError):
-            self._file.parent.mkdir(parents=True, exist_ok=True)
-            with self._file.open("a", encoding="utf-8") as f:
+            ensure_private_dir(self._file.parent)
+            with open_private(self._file, "a") as f:
                 f.write(json.dumps(entry) + "\n")
             self._trim()
 
@@ -78,7 +79,7 @@ class OperationJournal:
             with suppress(OSError):
                 reported = {**entry, "status": OperationStatus.INTERRUPTED.value, "time": datetime.now().isoformat()}
                 line = json.dumps(reported)
-                with self._file.open("a", encoding="utf-8") as f:
+                with open_private(self._file, "a") as f:
                     f.write(line + "\n")
 
 
