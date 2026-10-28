@@ -1,6 +1,6 @@
 """Enhanced rich progress bar with detailed status reporting."""
 
-from typing import Iterable, Optional, Sequence
+from typing import Callable, Iterable, Optional, Sequence
 
 from rich.progress import (
     BarColumn,
@@ -20,6 +20,9 @@ from mac_cleanup.console import console, print_panel
 
 class _ProgressBar:
     """Enhanced rich progress bar with detailed status and security feedback."""
+
+    # Set by front-ends that cannot use the terminal prompt (the TUI): called with (text, title)
+    prompt_handler: Optional[Callable[[str, str], bool]] = None
 
     def __init__(self):
         # Enhanced progress bar with more detailed columns
@@ -58,6 +61,9 @@ class _ProgressBar:
         :param default: Default value in prompt.
         :return: True on successful prompt
         """
+
+        if self.prompt_handler is not None:
+            return self.prompt_handler(prompt_text, prompt_title)
 
         # Stop refreshing progress bar
         self.current_progress.stop()

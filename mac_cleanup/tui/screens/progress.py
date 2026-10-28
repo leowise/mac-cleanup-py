@@ -1,5 +1,6 @@
 """Live progress dashboard — second screen of the TUI."""
 
+import threading
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -10,6 +11,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, ProgressBar, RichLog
 
 from mac_cleanup.tui.runner import CleanupResult, CleanupRunner, ModuleResult
+from mac_cleanup.tui.screens.confirm import ConfirmScreen
 
 
 class CleanupDone(Message):
@@ -81,12 +83,28 @@ class ProgressScreen(Screen[None]):
             self.call_from_thread(log.write, msg)
             self.call_from_thread(bar.advance, 1)
 
+        def confirm(text: str, title: str) -> bool:
+            # Runs on the engine's worker thread: show the dialog on the UI thread and wait for the answer
+            answered = threading.Event()
+            answer: list[bool] = []
+
+            def on_answer(value: Optional[bool]) -> None:
+                answer.append(bool(value))
+                answered.set()
+
+            self.app.call_from_thread(self.app.push_screen, ConfirmScreen(text, title), on_answer)
+            while not answered.wait(0.2):
+                if not self.app.is_running:
+                    return False  # app closed mid-question: decline
+            return answer[0]
+
         result = await runner.run(
             enabled_modules=self._enabled_modules,
             dry_run=self._dry_run,
             on_start=on_start,
             on_complete=on_complete,
             safe_delete=self._safe_delete,
+            confirm=confirm,
         )
         self.post_message(CleanupDone(result=result))
 

@@ -9,6 +9,7 @@ from typing import Callable, Iterator, Optional
 
 from mac_cleanup.core import _Collector
 from mac_cleanup.parser import args
+from mac_cleanup.progress import ProgressBar
 
 
 @dataclass
@@ -28,24 +29,27 @@ class CleanupResult:
 
 OnStartCallback = Callable[[str], None]
 OnCompleteCallback = Callable[[ModuleResult], None]
+ConfirmCallback = Callable[[str, str], bool]  # (text, title) -> accepted; called from the worker thread
 
 
 @contextmanager
-def _engine_flags(*, safe_delete: bool, dry_run: bool) -> Iterator[None]:
+def _engine_flags(*, safe_delete: bool, dry_run: bool, confirm: Optional[ConfirmCallback] = None) -> Iterator[None]:
     """
     Apply the TUI's choices to the engine's global flags for one run, then restore them.
 
-    ``force`` is set for real runs only: the user already confirmed on the dry-run summary
-    screen, and the engine's rich prompts cannot run while Textual owns the terminal.
+    The engine's rich prompts cannot run while Textual owns the terminal. With a ``confirm`` callback
+    they are routed to it, so size warnings and "no backup" questions reach the user. Without one,
+    ``force`` is set for real runs: the user already confirmed on the dry-run summary screen.
     """
 
-    before = (args.safe_delete, args.force)
+    before = (args.safe_delete, args.force, ProgressBar.prompt_handler)
     args.safe_delete = safe_delete
-    args.force = before[1] or not dry_run
+    args.force = before[1] or (not dry_run and confirm is None)
+    ProgressBar.prompt_handler = confirm
     try:
         yield
     finally:
-        args.safe_delete, args.force = before
+        args.safe_delete, args.force, ProgressBar.prompt_handler = before
 
 
 class CleanupRunner:
@@ -76,8 +80,9 @@ class CleanupRunner:
         on_start: OnStartCallback,
         on_complete: OnCompleteCallback,
         safe_delete: bool = False,
+        confirm: Optional[ConfirmCallback] = None,
     ) -> CleanupResult:
-        with _engine_flags(safe_delete=safe_delete, dry_run=dry_run):
+        with _engine_flags(safe_delete=safe_delete, dry_run=dry_run, confirm=confirm):
             return self._run_modules(enabled_modules, dry_run, on_start, on_complete)
 
     def _run_modules(
@@ -146,8 +151,9 @@ class CleanupRunner:
         on_start: OnStartCallback,
         on_complete: OnCompleteCallback,
         safe_delete: bool = False,
+        confirm: Optional[ConfirmCallback] = None,
     ) -> CleanupResult:
         """Run cleanup in a thread, reporting progress via callbacks."""
         return await asyncio.to_thread(
-            self._run_sync, enabled_modules, dry_run, on_start, on_complete, safe_delete
+            self._run_sync, enabled_modules, dry_run, on_start, on_complete, safe_delete, confirm
         )

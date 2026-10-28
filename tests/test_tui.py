@@ -273,3 +273,56 @@ async def test_runner_reports_errors_from_individual_commands(tmp_path):
 
     assert completed[0].status == "error"
     assert "rm failed" in (completed[0].error or "")
+
+
+async def test_runner_routes_engine_prompts_to_confirm_callback(tmp_path):
+    """With a confirm callback the engine's prompts reach it, and force stays off so they are asked."""
+    from mac_cleanup.parser import args
+    from mac_cleanup.progress import ProgressBar
+
+    asked: list[tuple[str, str]] = []
+    seen: list[tuple[bool, bool]] = []
+
+    def module():
+        seen.append((args.force, ProgressBar.prompt("really?", "title")))
+
+    def confirm(text: str, title: str) -> bool:
+        asked.append((text, title))
+        return False
+
+    before = (args.force, ProgressBar.prompt_handler)
+    with patch("mac_cleanup.tui.runner.statvfs") as mock_stat, patch.object(args, "force", False):
+        mock_stat.return_value = MagicMock(f_bavail=1000, f_frsize=4096)
+        runner = CleanupRunner(config_path=tmp_path / ".mac_cleanup_py", module_fns={"m": module})
+        await runner.run(
+            enabled_modules=["m"], dry_run=False, confirm=confirm, on_start=lambda _: None, on_complete=lambda _: None
+        )
+
+    assert asked == [("really?", "title")]
+    assert seen == [(False, False)]
+    assert ProgressBar.prompt_handler is before[1]
+
+
+def test_confirm_screen_strips_engine_markup():
+    from mac_cleanup.tui.screens.confirm import plain
+
+    assert plain("[danger]⚠️  NO BACKUP[/danger] keep [1.5 GB]") == "⚠️  NO BACKUP keep [1.5 GB]"
+
+
+@pytest.mark.parametrize(("key", "expected"), [("y", True), ("n", False), ("escape", False)])
+async def test_confirm_screen_keys(key, expected):
+    from textual.app import App
+
+    from mac_cleanup.tui.screens.confirm import ConfirmScreen
+
+    answers: list[bool] = []
+
+    class Host(App[None]):
+        def on_mount(self) -> None:
+            self.push_screen(ConfirmScreen("[bold]Delete?[/bold]", "[danger]Title[/danger]"), answers.append)
+
+    async with Host().run_test() as pilot:
+        await pilot.press(key)
+        await pilot.pause()
+
+    assert answers == [expected]
