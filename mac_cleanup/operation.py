@@ -12,6 +12,7 @@ class OperationStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     ROLLED_BACK = "rolled_back"
+    INTERRUPTED = "interrupted"
 
     @property
     def terminal(self) -> bool:

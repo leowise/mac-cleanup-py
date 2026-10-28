@@ -169,6 +169,31 @@ class EntryPoint:
                 title="[danger]Restore Failed"
             )
 
+    @staticmethod
+    def report_interrupted() -> None:
+        """Warn about deletions an earlier run started (and backed up) but never finished."""
+
+        from mac_cleanup.journal import journal
+
+        interrupted = journal.interrupted()
+        if not interrupted:
+            return
+
+        lines = "\n".join(
+            f"• {entry['path']}" + (f"\n  backup: {entry['backup']}" if entry.get("backup") else "")
+            for entry in interrupted[:10]
+        )
+        more = f"\n…and {len(interrupted) - 10} more" if len(interrupted) > 10 else ""
+        print_panel(
+            text=(
+                "[warning]An earlier run stopped while deleting these paths. They may be partly deleted;[/warning]\n"
+                "[warning]restore them from the backup with `mac-cleanup restore` if needed.[/warning]\n\n"
+                f"{lines}{more}"
+            ),
+            title="[danger]Interrupted cleanup detected",
+        )
+        journal.acknowledge(interrupted)
+
     @catch_exception
     def start(self) -> None:
         """Start mac_cleanup_py by cleaning console, loading config and parsing argument."""
@@ -186,6 +211,9 @@ class EntryPoint:
 
         # Check config
         config(configuration_prompted=args.configure)
+
+        # Tell the user about deletions an earlier run never finished
+        self.report_interrupted()
 
         # Handle restore mode
         if args.restore:

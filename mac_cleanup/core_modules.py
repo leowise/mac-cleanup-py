@@ -173,6 +173,14 @@ class Path(_BaseCommand):
 
         return self
 
+    def __set_status(self, status: OperationStatus, backup: Optional[Path_] = None) -> None:
+        """Update the status and journal it, so an interrupted run can be detected later."""
+
+        from mac_cleanup.journal import journal
+
+        self.__operation_status = status
+        journal.record(self.__path.as_posix(), status, str(backup) if backup else None)
+
     @property
     def __action(self) -> str:
         """Action name used in the operation log."""
@@ -278,11 +286,11 @@ class Path(_BaseCommand):
             and backup_manager.restore_backup(backup_path, backup_manager.restore_root(self.__path))
         )
         if restored:
-            self.__operation_status = OperationStatus.ROLLED_BACK
+            self.__set_status(OperationStatus.ROLLED_BACK)
             logger.log_operation(self.__path.as_posix(), 0, "rollback", True)
             return
 
-        self.__operation_status = OperationStatus.FAILED
+        self.__set_status(OperationStatus.FAILED)
 
     def __confirmed(self, size: float) -> bool:
         """
@@ -351,7 +359,7 @@ class Path(_BaseCommand):
             return
 
         if backup_path:
-            self.__operation_status = OperationStatus.BACKED_UP
+            self.__set_status(OperationStatus.BACKED_UP, backup_path)
             logger.log_operation(str(backup_path), size, "backup_created", True)
 
         try:
@@ -377,6 +385,6 @@ class Path(_BaseCommand):
         if self.__remaining():
             self.__rollback(backup_path)
         else:
-            self.__operation_status = OperationStatus.COMPLETED
+            self.__set_status(OperationStatus.COMPLETED)
 
         return result
