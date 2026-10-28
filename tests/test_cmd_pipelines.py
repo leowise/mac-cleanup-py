@@ -91,3 +91,67 @@ def test_attached_shell_syntax_is_inert_without_a_shell(command: str) -> None:
     import shlex
 
     assert cmd(command) == " ".join(shlex.split(command)[1:])
+
+
+def _fake_pipeline(monkeypatch: pytest.MonkeyPatch, codes: list[int]) -> list[list[str]]:
+    """Replace the pipeline runner with scripted exit codes; returns the argv of each call."""
+    calls: list[list[str]] = []
+
+    def fake(stages, *, ignore_errors, deadline):  # noqa: ANN001
+        calls.append(stages[0].argv)
+        return codes.pop(0), "out", "err"
+
+    monkeypatch.setattr("mac_cleanup.utils._run_pipeline", fake)
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    return calls
+
+
+def test_retries_until_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _fake_pipeline(monkeypatch, [1, 1, 0])
+    assert cmd("echo hi", retries=2) == "out"
+    assert len(calls) == 3
+
+
+def test_gives_up_after_the_last_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _fake_pipeline(monkeypatch, [1, 1, 1])
+    with pytest.raises(CommandError):
+        cmd("echo hi", retries=1, ignore_errors=False)
+    assert len(calls) == 2
+
+
+def test_no_retries_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _fake_pipeline(monkeypatch, [1])
+    cmd("echo hi")
+    assert len(calls) == 1
+
+
+def test_only_the_failing_part_of_an_and_chain_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _fake_pipeline(monkeypatch, [0, 1, 0])
+    cmd("echo first && echo second", retries=1)
+    assert calls == [["echo", "first"], ["echo", "second"], ["echo", "second"]]
+
+
+def test_retry_backoff_doubles_and_respects_the_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_pipeline(monkeypatch, [1, 1, 1, 1])
+    delays: list[float] = []
+    monkeypatch.setattr("time.sleep", delays.append)
+    cmd("echo hi", retries=3, retry_delay=1.0, timeout=100)
+    assert delays == [1.0, 2.0, 4.0]
+
+
+def test_timeouts_and_invalid_arguments_are_never_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    from subprocess import TimeoutExpired
+
+    calls: list[int] = []
+
+    def timing_out(stages, *, ignore_errors, deadline):  # noqa: ANN001
+        calls.append(1)
+        raise TimeoutExpired("x", 1)
+
+    monkeypatch.setattr("mac_cleanup.utils._run_pipeline", timing_out)
+    with pytest.raises(CommandTimeoutError):
+        cmd("echo hi", retries=3)
+    assert len(calls) == 1
+
+    with pytest.raises(CommandValidationError):
+        cmd("echo hi", retries=-1)

@@ -110,8 +110,40 @@ def _run_pipeline(stages: list[_Stage], *, ignore_errors: bool, deadline: float)
                 process.wait()
 
 
+def _run_with_retries(
+    pipeline: list[_Stage], *, command: str, ignore_errors: bool, deadline: float, retries: int, retry_delay: float
+) -> tuple[int, str, str]:
+    """
+    Run one pipeline, retrying non-zero exits with exponential backoff.
+
+    Only this pipeline is retried, so earlier ``&&`` steps never run twice. Timeouts and
+    exceptions propagate immediately, and no retry starts once the deadline would pass.
+    """
+    from time import monotonic, sleep
+
+    from mac_cleanup.logger import logger
+
+    for attempt in range(retries + 1):
+        result = _run_pipeline(pipeline, ignore_errors=ignore_errors, deadline=deadline)
+        delay = retry_delay * 2**attempt
+        if result[0] == 0 or attempt == retries or monotonic() + delay >= deadline:
+            break
+        logger.log_operation(command, 0, "command_retry", False)
+        sleep(delay)
+
+    return result
+
+
 @beartype
-def cmd(command: str, *, ignore_errors: bool = True, timeout: int = 30, validate_command: bool = True) -> str:
+def cmd(
+    command: str,
+    *,
+    ignore_errors: bool = True,
+    timeout: int = 30,
+    validate_command: bool = True,
+    retries: int = 0,
+    retry_delay: float = 0.5,
+) -> str:
     """
     Executes a command (``|`` and ``&&`` supported) without a shell, with security enhancements.
 
@@ -119,6 +151,8 @@ def cmd(command: str, *, ignore_errors: bool = True, timeout: int = 30, validate
     :param ignore_errors: If True, no stderr in return and failures don't raise
     :param timeout: Command execution timeout in seconds
     :param validate_command: If True, validate command against whitelist
+    :param retries: Extra attempts for a pipeline that exits non-zero (never for timeouts)
+    :param retry_delay: Seconds before the first retry; doubles each time, within ``timeout``
     :return: stdout of executed command
     """
     from subprocess import TimeoutExpired
@@ -127,8 +161,8 @@ def cmd(command: str, *, ignore_errors: bool = True, timeout: int = 30, validate
     from mac_cleanup.errors import CommandError, CommandTimeoutError, CommandValidationError
     from mac_cleanup.logger import logger
 
-    if timeout <= 0:
-        raise CommandValidationError("timeout must be greater than zero")
+    if timeout <= 0 or retries < 0:
+        raise CommandValidationError("timeout must be greater than zero and retries cannot be negative")
 
     # Validate command if requested
     if validate_command and not _is_command_allowed(command):
@@ -147,7 +181,10 @@ def cmd(command: str, *, ignore_errors: bool = True, timeout: int = 30, validate
 
     try:
         for pipeline in sequence:
-            returncode, stdout, stderr = _run_pipeline(pipeline, ignore_errors=ignore_errors, deadline=deadline)
+            returncode, stdout, stderr = _run_with_retries(
+                pipeline, command=command, ignore_errors=ignore_errors, deadline=deadline,
+                retries=retries, retry_delay=retry_delay,
+            )
             outputs.append(stdout.strip())
 
             # '&&': later pipelines only run after success

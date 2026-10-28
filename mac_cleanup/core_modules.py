@@ -57,6 +57,9 @@ class BaseModule(ABC):
 class _BaseCommand(BaseModule):
     """Base Command with basic command methods."""
 
+    # Extra attempts for commands that fail transiently (idempotent commands only)
+    _retries: int = 0
+
     @beartype
     def __init__(self, command_: Optional[str]):
         self.__command: Final[Optional[str]] = command_
@@ -85,7 +88,7 @@ class _BaseCommand(BaseModule):
             return
 
         # Execute command
-        return cmd(command=self.__command, ignore_errors=ignore_errors)
+        return cmd(command=self.__command, ignore_errors=ignore_errors, retries=self._retries)
 
 
 @final
@@ -117,6 +120,9 @@ class Path(_BaseCommand):
     """Collector list unit for cleaning paths."""
 
     __dry_run_only: bool = False
+
+    # Removing files can fail transiently while an app is still writing to them
+    _retries = 2
 
     @beartype
     def __init__(self, path: str):
@@ -241,7 +247,8 @@ class Path(_BaseCommand):
         output = ""
         for match in sorted(glob(self.__path.as_posix())):
             if check_deletable(path=match):
-                output += cmd(self._delete_command(Path_(match)), ignore_errors=ignore_errors) or ""
+                delete = self._delete_command(Path_(match))
+                output += cmd(delete, ignore_errors=ignore_errors, retries=self._retries) or ""
 
         return output
 
