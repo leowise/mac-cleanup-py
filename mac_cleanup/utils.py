@@ -1,110 +1,175 @@
 from pathlib import Path
+from typing import Optional
 
+import attr
 from beartype import beartype  # pyright: ignore [reportUnknownVariableType]
 
 
-@beartype
-def cmd(command: str, *, ignore_errors: bool = True, timeout: int = 30, validate_command: bool = True) -> str:  # noqa: C901
-    """
-    Executes command in Popen with security enhancements.
+# Redirection token -> (stream, target) assignments
+_REDIRECTS = {
+    ">/dev/null": (("stdout", "devnull"),),
+    "1>/dev/null": (("stdout", "devnull"),),
+    "2>/dev/null": (("stderr", "devnull"),),
+    "&>/dev/null": (("stdout", "devnull"), ("stderr", "devnull")),
+    ">&/dev/null": (("stdout", "devnull"), ("stderr", "devnull")),
+    "2>&1": (("stderr", "stdout"),),
+    ">&2": (("stdout", "stderr"),),
+    "1>&2": (("stdout", "stderr"),),
+}
+_FORBIDDEN_TOKENS = {";", "||", "`", "$(", "${"}
 
-    :param command: Bash command
-    :param ignore_errors: If True, no stderr in return
+
+@attr.s(slots=True)
+class _Stage:
+    """One program in a pipeline with its (shell-style) redirections."""
+
+    argv: list[str] = attr.ib(factory=list)
+    stdout: Optional[str] = attr.ib(default=None)  # "devnull" | "stderr"
+    stderr: Optional[str] = attr.ib(default=None)  # "devnull" | "stdout"
+
+
+def _parse_command(command: str) -> list[list[_Stage]]:
+    """
+    Parse a command into ``&&``-separated pipelines of stages without invoking a shell.
+
+    Supported operators are the unquoted tokens ``|`` and ``&&`` plus the redirections
+    ``>/dev/null``, ``2>/dev/null``, ``&>/dev/null``, ``2>&1`` and ``>&2``. Everything else
+    is an inert argument. Validation and execution share this parser, so what is checked
+    is exactly what runs.
+
+    :raises ValueError: On malformed commands or forbidden operators
+    """
+    import shlex
+
+    sequence: list[list[_Stage]] = [[_Stage()]]
+    for token in shlex.split(command):
+        if token in _FORBIDDEN_TOKENS:
+            raise ValueError(f"Operator not supported: {token}")
+
+        stage = sequence[-1][-1]
+        if token == "|":
+            sequence[-1].append(_Stage())
+        elif token == "&&":
+            sequence.append([_Stage()])
+        elif token in _REDIRECTS:
+            for stream, target in _REDIRECTS[token]:
+                setattr(stage, stream, target)
+        else:
+            stage.argv.append(token)
+
+    if any(not stage.argv for pipeline in sequence for stage in pipeline):
+        raise ValueError("Empty command in pipeline")
+
+    return sequence
+
+
+def _run_pipeline(stages: list[_Stage], *, ignore_errors: bool, deadline: float) -> tuple[int, str, str]:
+    """Run one pipeline; returns the last stage's exit code, stdout and stderr."""
+
+    from subprocess import DEVNULL, PIPE, STDOUT, Popen, TimeoutExpired
+    from time import monotonic
+
+    processes: list[Popen[str]] = []
+    try:
+        for index, stage in enumerate(stages):
+            is_last = index == len(stages) - 1
+
+            discard_stdout = stage.stdout == "devnull" or (stage.stdout == "stderr" and ignore_errors)
+            stdout = DEVNULL if discard_stdout else PIPE
+
+            if stage.stderr == "devnull" or ignore_errors or not is_last:
+                stderr = DEVNULL
+            elif stage.stderr == "stdout":
+                stderr = STDOUT
+            else:
+                stderr = PIPE
+
+            process = Popen(
+                stage.argv,
+                shell=False,  # Never use a shell: operators are handled by _parse_command
+                stdin=processes[-1].stdout if processes else None,
+                stdout=stdout,
+                stderr=stderr,
+                text=True,
+            )
+            # The next stage owns the read end now
+            if processes and processes[-1].stdout:
+                processes[-1].stdout.close()
+            processes.append(process)
+
+        stdout_text, stderr_text = processes[-1].communicate(timeout=max(deadline - monotonic(), 0.001))
+        for process in processes[:-1]:
+            process.wait(timeout=max(deadline - monotonic(), 0.001))
+        return processes[-1].returncode, stdout_text or "", stderr_text or ""
+    except TimeoutExpired:
+        raise
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+
+
+@beartype
+def cmd(command: str, *, ignore_errors: bool = True, timeout: int = 30, validate_command: bool = True) -> str:
+    """
+    Executes a command (``|`` and ``&&`` supported) without a shell, with security enhancements.
+
+    :param command: Command line
+    :param ignore_errors: If True, no stderr in return and failures don't raise
     :param timeout: Command execution timeout in seconds
     :param validate_command: If True, validate command against whitelist
     :return: stdout of executed command
     """
-    import shlex
     from subprocess import TimeoutExpired
+    from time import monotonic
 
     from mac_cleanup.errors import CommandError, CommandTimeoutError, CommandValidationError
+    from mac_cleanup.logger import logger
 
     if timeout <= 0:
         raise CommandValidationError("timeout must be greater than zero")
 
     # Validate command if requested
     if validate_command and not _is_command_allowed(command):
-        from mac_cleanup.logger import logger
         logger.log_operation(command, 0, "command_blocked", False)
         raise CommandValidationError(f"Command not allowed: {command}")
 
-    # Sanitize command - prevent command injection by ensuring it's properly formed
     try:
-        # Parse command to ensure it's safe
-        parsed_command = shlex.split(command)
-        if not parsed_command:
-            raise ValueError("Empty command")
+        sequence = _parse_command(command)
     except ValueError as e:
-        from mac_cleanup.logger import logger
         logger.log_operation(command, 0, "command_parse_error", False)
         raise CommandValidationError(f"Invalid command format: {e}") from e
 
-    from subprocess import DEVNULL, PIPE, Popen
+    deadline = monotonic() + timeout
+    outputs: list[str] = []
+    returncode, stderr = 0, ""
 
-    # Translate the small redirection forms used by existing modules without
-    # invoking a shell. They are removed from argv and represented by Popen
-    # streams instead.
-    stderr_redirect = False
-    cleaned_command = []
-    skip_next = False
-    for token in parsed_command:
-        if skip_next:
-            skip_next = False
-            continue
-        if token in {">&2", "1>&2"}:
-            stderr_redirect = True
-            continue
-        if token in {">/dev/null", "1>/dev/null", "2>/dev/null", "2>&1"}:
-            continue
-        cleaned_command.append(token)
-    parsed_command = cleaned_command
-
-    process = None
     try:
-        # Execute command with timeout
-        process = Popen(
-            parsed_command,
-            shell=False,  # Use shell=False for better security
-            stdout=(DEVNULL if stderr_redirect and ignore_errors else PIPE),
-            stderr=(DEVNULL if ignore_errors else PIPE),
-            text=True  # Get text output directly
-        )
+        for pipeline in sequence:
+            returncode, stdout, stderr = _run_pipeline(pipeline, ignore_errors=ignore_errors, deadline=deadline)
+            outputs.append(stdout.strip())
 
-        # Get stdout and stderr
-        stdout, stderr = process.communicate(timeout=timeout)
-
-        # Log command execution
-        from mac_cleanup.logger import logger
-        success = process.returncode == 0
-        logger.log_operation(command, 0, "command_executed", success)
-
-        # Handle errors
-        if not ignore_errors and process.returncode != 0:
-            error_output = stderr or "Command failed"
-            raise CommandError(
-                f"Command failed (exit code {process.returncode}): {error_output}"
-            )
-
-        # Return combined output
-        output = stdout or ""
-        if not ignore_errors and stderr:
-            output += "\n" + stderr
-
-        return output.strip()
-
+            # '&&': later pipelines only run after success
+            if returncode != 0:
+                break
     except TimeoutExpired as e:
-        from mac_cleanup.logger import logger
         logger.log_operation(command, 0, "command_timeout", False)
-        # Kill the process if it times out
-        if process:
-            process.kill()
         raise CommandTimeoutError(f"Command timed out after {timeout} seconds: {command}", cause=e) from e
-    except (CommandError, CommandTimeoutError):
-        raise
     except Exception as e:
-        from mac_cleanup.logger import logger
         logger.log_operation(command, 0, "command_error", False)
         raise CommandError(f"Command execution failed: {e}", cause=e) from e
+
+    logger.log_operation(command, 0, "command_executed", returncode == 0)
+
+    if not ignore_errors and returncode != 0:
+        raise CommandError(f"Command failed (exit code {returncode}): {stderr or 'Command failed'}")
+
+    output = "\n".join(part for part in outputs if part)
+    if not ignore_errors and stderr:
+        output += "\n" + stderr.strip()
+
+    return output.strip()
 
 
 def _is_command_allowed(command: str) -> bool:
@@ -145,37 +210,26 @@ def _is_command_allowed(command: str) -> bool:
         "ssh", "scp", "ftp", "telnet"  # Network access (except curl/wget which are allowed)
     }
 
-    import shlex
-
     try:
-        parsed = shlex.split(command)
-        if not parsed:
-            return False
+        sequence = _parse_command(command)
+    except ValueError:
+        return False
 
-        # shell=False means operators are not interpreted.  Reject operators that
-        # could hide a second command, while retaining the pipe/redirection syntax
-        # used by existing default modules as inert arguments.
-        if any(token in {";", "&&", "||", "`", "$(", "${"} for token in parsed):
-            return False
-
-        def executable_allowed(value: str) -> bool:
-            if value.startswith("/"):
-                resolved = Path(value).resolve()
-                allowed_directories = {"/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/sbin"}
-                if resolved.parent.as_posix() not in allowed_directories:
-                    return False
-                value = resolved.name
-            if value in dangerous_commands:
+    def executable_allowed(value: str) -> bool:
+        if value.startswith("/"):
+            resolved = Path(value).resolve()
+            allowed_directories = {"/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/sbin"}
+            if resolved.parent.as_posix() not in allowed_directories:
                 return False
-            return value in allowed_commands
+            value = resolved.name
+        if value in dangerous_commands:
+            return False
+        return value in allowed_commands
 
-        # Validate the first executable and any executable following a pipeline.
-        # Other tokens are arguments and are never interpreted by Popen.
-        command_positions = [0]
-        command_positions.extend(i + 1 for i, token in enumerate(parsed[:-1]) if token == "|")
-        return all(pos < len(parsed) and executable_allowed(parsed[pos]) for pos in command_positions)
-
-    except (ValueError, OSError):
+    # Every program of every pipeline must be allowed; all other tokens are inert arguments
+    try:
+        return all(executable_allowed(stage.argv[0]) for pipeline in sequence for stage in pipeline)
+    except OSError:
         return False
 
 
