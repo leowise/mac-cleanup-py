@@ -1,16 +1,19 @@
 """Backup module for mac_cleanup operations."""
 
+import hashlib
 import os
 import tarfile
+from glob import glob
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from mac_cleanup.logger import logger
 from mac_cleanup.utils import bytes_to_human
 
 
 DEFAULT_RETENTION = 10
+_GLOB_CHARS = "*?["
 _RUN_SEPARATOR = "__"
 
 
@@ -41,35 +44,60 @@ class BackupManager:
             raise ValueError("Backup retention must be at least 1")
         self._retention = value
 
+    @staticmethod
+    def restore_root(path: Path) -> Path:
+        """
+        Directory a backup of ``path`` must be restored into.
+
+        For a glob this is the literal directory before the first wildcard segment, which
+        is what the archive members are relative to; otherwise it is the parent directory.
+        """
+        parts = path.parts
+        wildcard_at = next((i for i, part in enumerate(parts) if any(c in part for c in _GLOB_CHARS)), None)
+        if wildcard_at is None:
+            return path.parent
+        return Path(*parts[:wildcard_at]) if wildcard_at else Path("/")
+
+    @classmethod
+    def _entries(cls, path: Path) -> List[Tuple[Path, str]]:
+        """Existing items to archive for ``path`` (expanding globs) with their archive names."""
+        if any(char in path.as_posix() for char in _GLOB_CHARS):
+            root = cls.restore_root(path)
+            matches = (Path(match) for match in sorted(glob(path.as_posix())))
+            return [(match, match.relative_to(root).as_posix()) for match in matches]
+        return [(path, path.name)] if path.exists() or path.is_symlink() else []
+
     def create_backup(self, path: Path, description: str = "") -> Optional[Path]:
         """
-        Create a tar.gz backup of the given path.
+        Create a tar.gz backup of the given path (all matches, for a glob).
 
         :param path: Path to backup
         :param description: Optional description for the backup
-        :return: Path to the created backup file, or None if failed
+        :return: Path to the created backup file, or None if nothing to back up or it failed
         """
-        if not path.exists():
+        entries = self._entries(path)
+        if not entries:
             return None
 
-        # Generate backup filename with timestamp
+        # Generate backup filename with timestamp; the digest keeps long paths unique
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_name = str(path).replace("/", "_").replace("\\", "_").lstrip("_")
-        backup_name = f"{self._run_id}{_RUN_SEPARATOR}{safe_name}_{timestamp}.tar.gz"
+        safe_name = "".join("_" if c in f"/\\{_GLOB_CHARS}]" else c for c in str(path)).lstrip("_")
+        digest = hashlib.sha1(str(path).encode(), usedforsecurity=False).hexdigest()[:8]
+        backup_name = f"{self._run_id}{_RUN_SEPARATOR}{safe_name[-80:]}_{digest}_{timestamp}.tar.gz"
         backup_path = self._backup_dir / backup_name
 
         try:
-            # Create tar.gz archive
+            # Create tar.gz archive with names relative to the restore root
             with tarfile.open(backup_path, "w:gz") as tar:
-                # Add the path to the archive
-                # Use relative path in archive to avoid absolute path issues
-                tar.add(path, arcname=path.name)
+                for source, arcname in entries:
+                    tar.add(source, arcname=arcname)
 
             self.cleanup_old_backups()
             return backup_path
 
-        except (OSError, IOError):
-            # If backup fails, log it but don't crash the main operation
+        except (OSError, tarfile.TarError):
+            # Never leave a partial archive that could be mistaken for a complete backup
+            backup_path.unlink(missing_ok=True)
             logger.log_operation(str(path), 0, "backup_failed", False)
             return None
 

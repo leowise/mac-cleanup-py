@@ -157,3 +157,101 @@ def test_command_that_leaves_target_behind_is_failed_and_retryable(
     assert operation.operation_status is OperationStatus.FAILED
     assert not operation.operation_status.terminal
     assert target.exists()
+
+
+def _glob_dir(tmp_path: Path) -> Path:
+    base = tmp_path / "cache"
+    base.mkdir()
+    (base / "a.txt").write_text("a")
+    (base / "b.txt").write_text("b")
+    (base / "sub").mkdir()
+    (base / "sub" / "c.txt").write_text("c")
+    (base / ".hidden").write_text("h")
+    return base
+
+
+def test_glob_path_actually_deletes_matches(isolated_state: Path) -> None:
+    base = _glob_dir(isolated_state)
+    operation = CleanupPath(str(base / "*"))
+
+    operation._execute()
+    # Like a shell glob, '*' does not match dotfiles
+    assert sorted(p.name for p in base.iterdir()) == [".hidden"]
+    assert operation.operation_status is OperationStatus.COMPLETED
+
+
+def test_glob_path_is_backed_up_and_restorable(isolated_state: Path) -> None:
+    base = _glob_dir(isolated_state)
+    CleanupPath(str(base / "*"))._execute()
+
+    archives = backup_manager.list_backups()
+    assert len(archives) == 1
+    assert backup_manager.restore_backup(archives[0]["path"], backup_manager.restore_root(base / "*"))
+    assert (base / "a.txt").read_text() == "a"
+    assert (base / "sub" / "c.txt").read_text() == "c"
+
+
+def test_glob_without_matches_is_skipped_quietly(isolated_state: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    empty = isolated_state / "empty"
+    empty.mkdir()
+    prompts = _oversized(monkeypatch, [])
+    operation = CleanupPath(str(empty / "*"))
+
+    assert operation._execute() is None
+    assert operation.operation_status is OperationStatus.SKIPPED
+    assert prompts == []
+    assert backup_manager.list_backups() == []
+
+
+def test_glob_matches_failing_validation_are_left_alone(isolated_state: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    base = _glob_dir(isolated_state)
+    real = __import__("mac_cleanup.utils", fromlist=["check_deletable"]).check_deletable
+    monkeypatch.setattr(f"{MODULE}.check_deletable", lambda path: Path(path).name != "b.txt" and real(path))
+
+    operation = CleanupPath(str(base / "*"))
+    operation._execute()
+    assert (base / "b.txt").exists()
+    assert not (base / "a.txt").exists()
+    assert operation.operation_status is OperationStatus.FAILED
+
+
+def test_failed_glob_command_that_removed_everything_is_rolled_back(
+    isolated_state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil
+
+    base = _glob_dir(isolated_state)
+    operation = CleanupPath(str(base / "*"))
+
+    def failing_cmd(command: str, **_: object) -> str:
+        for child in [p for p in base.iterdir() if p.name != ".hidden"]:
+            shutil.rmtree(child) if child.is_dir() else child.unlink()
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(f"{MODULE}.cmd", failing_cmd)
+    with pytest.raises(RuntimeError):
+        operation._execute()
+    assert operation.operation_status is OperationStatus.ROLLED_BACK
+    assert (base / "sub" / "c.txt").read_text() == "c"
+
+
+def test_failed_backup_leaves_no_partial_archive(isolated_state: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import tarfile
+
+    base = _glob_dir(isolated_state)
+
+    def broken_add(self, *args: object, **kwargs: object) -> None:
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(tarfile.TarFile, "add", broken_add)
+    assert backup_manager.create_backup(base / "*") is None
+    assert list(backup_manager.get_backup_dir().iterdir()) == []
+
+
+def test_restore_root_is_the_literal_directory_before_the_first_wildcard(tmp_path: Path) -> None:
+    root = backup_manager.restore_root
+    assert root(Path("/a/b/*")) == Path("/a/b")
+    assert root(Path("/a/b/c*/d")) == Path("/a/b")
+    assert root(Path("/a/b/[!x]*")) == Path("/a/b")
+    assert root(Path("/a/b/file")) == Path("/a/b")
+    assert root(Path("/*.hprof")) == Path("/")

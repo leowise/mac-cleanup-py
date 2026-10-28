@@ -123,18 +123,20 @@ class Path(_BaseCommand):
         self.__path: Final[Path_] = Path_(path).expanduser()
         self.__operation_status = OperationStatus.PENDING
 
-        # Use trash command if safe-delete is enabled
-        if args.safe_delete:
-            # Use osascript to move to trash (safer than rm -rf)
-            tmp_command = (
-                "osascript -e 'tell application \"Finder\" to delete "
-                f"POSIX file \"{self.__path.as_posix()}\"'"
-            )
-        else:
-            # Use rm -rf for permanent deletion
-            tmp_command = "rm -rf '{path}'".format(path=self.__path.as_posix())
+        tmp_command = self._delete_command(self.__path)
 
         super().__init__(command_=tmp_command)
+
+    @staticmethod
+    def _delete_command(path: Path_) -> str:
+        """Command removing ``path``: Finder trash with safe-delete, otherwise rm -rf."""
+
+        if args.safe_delete:
+            # Use osascript to move to trash (safer than rm -rf)
+            return "osascript -e 'tell application \"Finder\" to delete " f"POSIX file \"{path.as_posix()}\"'"
+
+        # Use rm -rf for permanent deletion
+        return f"rm -rf '{path.as_posix()}'"
 
     @property
     def get_path(self) -> Path_:
@@ -161,6 +163,45 @@ class Path(_BaseCommand):
 
         return "move_to_trash" if args.safe_delete else "delete"
 
+    @property
+    def __is_glob(self) -> bool:
+        """Whether the path contains shell-style wildcards."""
+
+        return any(char in self.__path.as_posix() for char in "*?[")
+
+    def __nothing_to_do(self) -> bool:
+        """Dry-run-only paths, undeletable or missing paths, and globs without matches."""
+
+        if self.__dry_run_only:
+            return True
+
+        if not all([check_deletable(path=self.__path), check_exists(path=self.__path, expand_user=False)]):
+            return True
+
+        # A glob that matches nothing has nothing to confirm, back up or delete
+        return self.__is_glob and not self.__remaining()
+
+    def __execute_glob(self, ignore_errors: bool) -> Optional[str]:
+        """
+        Delete every match of a glob path.
+
+        Commands run without a shell, so wildcards are never expanded by ``rm``. The matches
+        are expanded here instead and each one is validated before it is removed.
+        """
+
+        from glob import glob
+
+        # Respect the module's own prompt (with_prompt) like any other command
+        if not BaseModule._execute(self):
+            return None
+
+        output = ""
+        for match in sorted(glob(self.__path.as_posix())):
+            if check_deletable(path=match):
+                output += cmd(self._delete_command(Path_(match)), ignore_errors=ignore_errors) or ""
+
+        return output
+
     def __remaining(self) -> bool:
         """Whether anything the path (or glob) refers to is still on disk."""
 
@@ -184,7 +225,7 @@ class Path(_BaseCommand):
         restored = (
             backup_path is not None
             and not self.__remaining()
-            and backup_manager.restore_backup(backup_path, self.__path.parent)
+            and backup_manager.restore_backup(backup_path, backup_manager.restore_root(self.__path))
         )
         if restored:
             self.__operation_status = OperationStatus.ROLLED_BACK
@@ -241,10 +282,7 @@ class Path(_BaseCommand):
         if self.__operation_status.terminal:
             return None
 
-        # Skip dry-run-only paths, and paths that are not deletable or don't exist
-        if self.__dry_run_only or not all(
-            [check_deletable(path=self.__path), check_exists(path=self.__path, expand_user=False)]
-        ):
+        if self.__nothing_to_do():
             self.__operation_status = OperationStatus.SKIPPED
             return
 
@@ -268,7 +306,9 @@ class Path(_BaseCommand):
             logger.log_operation(str(backup_path), size, "backup_created", True)
 
         try:
-            result = super()._execute(ignore_errors=ignore_errors)
+            result = (
+                self.__execute_glob(ignore_errors) if self.__is_glob else super()._execute(ignore_errors=ignore_errors)
+            )
         except Exception:
             logger.log_operation(self.__path.as_posix(), size, self.__action, False)
             self.__rollback(backup_path)
