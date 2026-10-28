@@ -237,3 +237,45 @@ class TestEntryPoint:
             expected_path = "home/.mac_cleanup_py"
 
         assert str(EntryPoint().config_path) == expected_path
+
+
+class TestPreviewByDefault:
+    """An interactive cleanup starts with the dry-run preview."""
+
+    @staticmethod
+    def _setup(monkeypatch: pytest.MonkeyPatch, *, tty: bool, **flags: bool) -> None:
+        import sys
+
+        from mac_cleanup.parser import args
+
+        for name in ("force", "no_preview"):
+            monkeypatch.setattr(args, name, flags.get(name, False))
+        monkeypatch.delenv("MAC_CLEANUP_NO_PREVIEW", raising=False)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: tty, raising=False)
+        monkeypatch.setattr(sys.stdout, "isatty", lambda: tty, raising=False)
+
+    def test_previews_on_a_terminal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mac_cleanup.main import EntryPoint
+
+        self._setup(monkeypatch, tty=True)
+        assert EntryPoint.should_preview() is True
+
+    @pytest.mark.parametrize("flags", [{"force": True}, {"no_preview": True}])
+    def test_flags_skip_the_preview(self, monkeypatch: pytest.MonkeyPatch, flags: dict[str, bool]) -> None:
+        from mac_cleanup.main import EntryPoint
+
+        self._setup(monkeypatch, tty=True, **flags)
+        assert EntryPoint.should_preview() is False
+
+    def test_environment_variable_skips_the_preview(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mac_cleanup.main import EntryPoint
+
+        self._setup(monkeypatch, tty=True)
+        monkeypatch.setenv("MAC_CLEANUP_NO_PREVIEW", "1")
+        assert EntryPoint.should_preview() is False
+
+    def test_scripted_runs_are_unaffected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mac_cleanup.main import EntryPoint
+
+        self._setup(monkeypatch, tty=False)
+        assert EntryPoint.should_preview() is False

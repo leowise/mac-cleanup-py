@@ -122,6 +122,7 @@ options:
   -f, --force        Accept all warnings
   -v, --verbose      Print folders to be deleted
   -r, --restore      Restore files from a backup
+  -N, --no-preview     Skip the dry-run preview that precedes an interactive cleanup
   -l, --no-size-limit  Do not warn about paths larger than the 1 GB deletion size limit
 
 ```
@@ -133,6 +134,9 @@ Automation can provide configuration without opening prompts:
 - `MAC_CLEANUP_CONFIG` points to a configuration file.
 - `MAC_CLEANUP_ENABLED_MODULES` is a comma-separated list of enabled modules.
 - `MAC_CLEANUP_CUSTOM_PATH` sets the custom module directory.
+
+An interactive cleanup (a terminal, without `--force`) first shows the dry-run summary and asks
+before deleting anything; `--no-preview` or `MAC_CLEANUP_NO_PREVIEW` skips it.
 
 Cleanup paths are restricted to the configured safe-path whitelist. Unscoped
 wildcards and critical system or user-document paths are rejected. Permanent

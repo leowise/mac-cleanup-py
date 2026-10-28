@@ -20,6 +20,7 @@ class Args:
     safe_delete: bool = attr.ib(default=False)
     restore: bool = attr.ib(default=False)
     no_size_limit: bool = attr.ib(default=False)
+    no_preview: bool = attr.ib(default=False)
     command: Optional[str] = attr.ib(default=None)
 
 
@@ -49,6 +50,9 @@ def _add_common_flags(target_parser: ArgumentParser) -> None:
     target_parser.add_argument("-v", "--verbose", help="Print folders to be deleted", action="store_true")
     target_parser.add_argument(
         "-s", "--safe-delete", help="Move files to trash instead of permanent deletion", action="store_true"
+    )
+    target_parser.add_argument(
+        "-N", "--no-preview", help="Skip the dry-run preview that precedes an interactive cleanup", action="store_true"
     )
     target_parser.add_argument(
         "-l", "--no-size-limit", help="Do not warn about paths larger than the deletion size limit", action="store_true"
@@ -127,6 +131,9 @@ parser.add_argument("-f", "--force", help="Accept all warnings", action="store_t
 parser.add_argument("-v", "--verbose", help="Print folders to be deleted", action="store_true")
 parser.add_argument(
     "-s", "--safe-delete", help="Move files to trash instead of permanent deletion", action="store_true"
+)
+parser.add_argument(
+    "-N", "--no-preview", help="Skip the dry-run preview that precedes an interactive cleanup", action="store_true"
 )
 parser.add_argument(
     "-l", "--no-size-limit", help="Do not warn about paths larger than the deletion size limit", action="store_true"

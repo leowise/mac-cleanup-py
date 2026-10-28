@@ -170,6 +170,22 @@ class EntryPoint:
             )
 
     @staticmethod
+    def should_preview() -> bool:
+        """
+        Whether a cleanup starts with a dry-run preview and asks before proceeding.
+
+        True for interactive terminals unless ``--force``, ``--no-preview`` or the
+        ``MAC_CLEANUP_NO_PREVIEW`` environment variable is set, so scripted runs are unaffected.
+        """
+
+        from sys import stdin, stdout
+
+        if args.force or args.no_preview or environ.get("MAC_CLEANUP_NO_PREVIEW"):
+            return False
+
+        return stdin.isatty() and stdout.isatty()
+
+    @staticmethod
     def report_interrupted() -> None:
         """Warn about deletions an earlier run started (and backed up) but never finished."""
 
@@ -221,7 +237,7 @@ class EntryPoint:
             return
 
         # Handle dry runs
-        if args.dry_run:
+        if args.dry_run or self.should_preview():
             from rich.prompt import Confirm
 
             console.print("[info]🔍 Performing dry run analysis...[/info]")
