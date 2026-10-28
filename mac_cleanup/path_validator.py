@@ -38,6 +38,35 @@ class PathValidator:
         # User-specific directories that are safe to clean
         "~/Downloads/temp",
         "~/Desktop/temp",
+        # Developer tool caches and logs
+        "~/.android/cache",
+        "~/.bun/install/cache",
+        "~/.cacher/logs",
+        "~/.conan2/p",
+        "~/.gradle/caches",
+        "~/.kite/logs",
+        "~/.lunarclient/game-cache",
+        "~/.lunarclient/launcher-cache",
+        "~/.lunarclient/logs",
+        "~/.lunarclient/offline/*/logs",
+        "~/.lunarclient/offline/files/*/logs",
+        "~/.npm",
+        "~/.nuget/packages",
+        "~/.pnpm-store",
+        "~/go/pkg/mod",
+        "~/Library/Developer/CoreSimulator/Devices/*/data",
+        "~/Library/Developer/Xcode/Archives",
+        "~/Library/Developer/Xcode/DerivedData",
+        "~/Library/Developer/Xcode/iOS Device Logs",
+        # Application caches and logs
+        "~/Dropbox/.dropbox.cache",
+        "~/Library/Containers/com.apple.mail/Data/Library/Logs/Mail",
+        "~/Library/Group Containers/*.ru.keepcoder.Telegram/stable",
+        "~/Music/iTunes/iTunes Media/Mobile Applications",
+        # Stray files in the home directory
+        "~/*.hprof",
+        "~/.wget-hsts",
+        "~/wget-log",
     }
 
     # Paths that should never be touched
@@ -165,16 +194,28 @@ class PathValidator:
         return result
 
     def _is_blocked_path(self, path_str: str) -> bool:
-        """Check if path is in the blocked list."""
+        """
+        Check if path is in the blocked list.
+
+        A critical directory may contain explicitly approved subtrees (for example
+        ``/private/var/folders`` or ``/Library/Logs``). A path is exempt only when it
+        matches an allowed pattern that lies strictly *inside* the blocked directory,
+        so the critical directory itself can never be allowed.
+        """
         for blocked in self.blocked_paths:
             if not (path_str.startswith(blocked + "/") or path_str == blocked):
                 continue
-            # /private contains explicitly approved temporary/log subtrees;
-            # retain the broad block for everything else.
-            if blocked == "/private" and path_str != blocked and self._is_allowed_path(path_str):
+            if path_str != blocked and self._is_allowed_inside(path_str, blocked):
                 continue
             return True
         return False
+
+    def _is_allowed_inside(self, path_str: str, blocked: str) -> bool:
+        """Check if path matches an allowed pattern nested strictly inside ``blocked``."""
+        return any(
+            pattern.startswith(blocked + "/") and self._matches_pattern(path_str, pattern)
+            for pattern in self.allowed_paths | self.user_allowed_paths
+        )
 
     def _is_allowed_path(self, path_str: str) -> bool:
         """Check if path is in the allowed list."""
@@ -186,18 +227,29 @@ class PathValidator:
         # Check default allowed paths
         return any(self._matches_pattern(path_str, allowed) for allowed in self.allowed_paths)
 
+    @staticmethod
+    def _canonical(path_str: str) -> List[str]:
+        """Resolve symlinks in the literal prefix of a path and return its segments."""
+        parts = Path(path_str).expanduser().parts
+        wildcard_at = next((i for i, part in enumerate(parts) if any(c in part for c in "*?[")), len(parts))
+        resolved = Path(*parts[:wildcard_at]).resolve(strict=False) if wildcard_at else Path()
+        return list(resolved.parts) + list(parts[wildcard_at:])
+
     def _matches_pattern(self, path_str: str, pattern: str) -> bool:
-        """Check a normalized path against an allowlist pattern safely."""
-        pattern = Path(pattern).expanduser().as_posix()
-        if any(char in pattern for char in "*?["):
-            prefix, suffix = pattern.split("*", 1)
-            canonical_prefix = Path(prefix).resolve(strict=False).as_posix()
-            pattern = canonical_prefix + "*" + suffix
-            candidate = Path(path_str).resolve(strict=False).as_posix()
-            return fnmatch.fnmatchcase(candidate, pattern)
-        canonical_pattern = Path(pattern).resolve(strict=False).as_posix()
-        candidate = Path(path_str).resolve(strict=False).as_posix()
-        return candidate == canonical_pattern or candidate.startswith(canonical_pattern.rstrip("/") + "/")
+        """
+        Check a path against an allowlist pattern, segment by segment.
+
+        A path matches when it equals the pattern or lies beneath it. Wildcards in the
+        pattern match within a single path segment only, and a wildcard in the path is
+        only accepted where the pattern has the same wildcard, so ``~/Library/*`` is
+        never covered by ``~/Library/Caches``.
+        """
+        pattern_parts = self._canonical(pattern)
+        path_parts = self._canonical(path_str)
+        if len(path_parts) < len(pattern_parts):
+            return False
+        pairs = zip(path_parts, pattern_parts, strict=False)
+        return all(fnmatch.fnmatchcase(part, expected) for part, expected in pairs)
 
     def _check_size_limits(self, path: Path) -> Dict[str, Any]:
         """Check size limits for a path."""
@@ -335,7 +387,3 @@ def get_cleanup_path_info(path: Union[str, Path]) -> Dict[str, Any]:
     :return: Detailed validation information
     """
     return path_validator.validate_path(path, check_size=True)
-
-
-# Global path validator instance
-path_validator = PathValidator()

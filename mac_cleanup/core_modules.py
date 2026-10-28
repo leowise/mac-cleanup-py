@@ -155,44 +155,107 @@ class Path(_BaseCommand):
 
         return self
 
-    def _execute(self, ignore_errors: bool = True) -> Optional[str]:
-        """Delete specified path and retain a resumable operation status."""
+    @property
+    def __action(self) -> str:
+        """Action name used in the operation log."""
 
-        # Cleanup runs can safely be retried: completed or skipped paths are
-        # terminal and must not prompt or execute a second time.
+        return "move_to_trash" if args.safe_delete else "delete"
+
+    def __remaining(self) -> bool:
+        """Whether anything the path (or glob) refers to is still on disk."""
+
+        from glob import glob
+
+        text = self.__path.as_posix()
+        if any(char in text for char in "*?["):
+            return bool(glob(text))
+
+        return self.__path.exists() or self.__path.is_symlink()
+
+    def __rollback(self, backup_path: Optional[Path_]) -> None:
+        """Restore the pre-deletion backup when the target was removed by a failed command."""
+
+        from mac_cleanup.backup import backup_manager
+        from mac_cleanup.logger import logger
+
+        # Restore is non-destructive and refuses to overwrite leftovers, so it is only
+        # attempted when nothing remains. A partially deleted target stays FAILED and
+        # the backup is kept for a manual `restore`.
+        restored = (
+            backup_path is not None
+            and not self.__remaining()
+            and backup_manager.restore_backup(backup_path, self.__path.parent)
+        )
+        if restored:
+            self.__operation_status = OperationStatus.ROLLED_BACK
+            logger.log_operation(self.__path.as_posix(), 0, "rollback", True)
+            return
+
+        self.__operation_status = OperationStatus.FAILED
+
+    def __confirmed(self, size: float) -> bool:
+        """
+        Warn about oversized paths and ask for deletion confirmation.
+
+        Paths over the size limit are always called out; ``--force`` accepts the warning
+        and ``--no-size-limit`` suppresses it.
+        """
+
+        from mac_cleanup.console import console
+        from mac_cleanup.logger import logger
+        from mac_cleanup.path_validator import path_validator
+        from mac_cleanup.utils import bytes_to_human
+
+        limit = path_validator.size_limits["block_threshold"]
+        oversized = size > limit and not args.no_size_limit
+        size_warning = (
+            f"\n[warning]Larger than the {bytes_to_human(limit)} deletion limit "
+            f"(use --no-size-limit to skip this warning).[/warning]"
+            if oversized
+            else ""
+        )
+
+        if oversized:
+            logger.log_operation(self.__path.as_posix(), size, "size_limit_warning", True)
+
+        if args.force:
+            if oversized:
+                console.print(f"[warning]{self.__path.as_posix()} is {bytes_to_human(size)}.{size_warning}[/warning]")
+            return True
+
+        from mac_cleanup.progress import ProgressBar
+
+        action_text = "move to trash" if args.safe_delete else "permanently delete"
+        prompt_text = (
+            f"This will {action_text}: {self.__path.as_posix()}\n"
+            f"Estimated size: {bytes_to_human(size)}{size_warning}\n\n"
+            f"This action {'cannot be undone' if not args.safe_delete else 'can be undone from Trash'}!"
+        )
+        return ProgressBar.prompt(prompt_text=prompt_text, prompt_title="[danger]⚠️  DELETION CONFIRMATION REQUIRED")
+
+    def _execute(self, ignore_errors: bool = True) -> Optional[str]:
+        """Delete specified path and track its operation status."""
+
+        # Completed or rolled-back paths must not prompt or execute a second time.
+        # Skipped and failed paths stay retryable.
         if self.__operation_status.terminal:
             return None
 
-        if self.__dry_run_only:
+        # Skip dry-run-only paths, and paths that are not deletable or don't exist
+        if self.__dry_run_only or not all(
+            [check_deletable(path=self.__path), check_exists(path=self.__path, expand_user=False)]
+        ):
             self.__operation_status = OperationStatus.SKIPPED
             return
 
-        # Skip if path is not deletable or undefined
-        if not all([check_deletable(path=self.__path), check_exists(path=self.__path, expand_user=False)]):
-            self.__operation_status = OperationStatus.SKIPPED
-            return
-
-        # Calculate size for confirmation prompt
         from mac_cleanup.core import _Collector
-        size = _Collector._get_size(self.__path)
-        from mac_cleanup.utils import bytes_to_human
-        size_human = bytes_to_human(size)
+        from mac_cleanup.logger import logger
 
-        # Show confirmation prompt unless force flag is used
-        if not args.force:
-            from mac_cleanup.progress import ProgressBar
-            action_text = "move to trash" if args.safe_delete else "permanently delete"
-            prompt_text = (
-                f"This will {action_text}: {self.__path.as_posix()}\n"
-                f"Estimated size: {size_human}\n\n"
-                f"This action {'cannot be undone' if not args.safe_delete else 'can be undone from Trash'}!"
-            )
-            if not ProgressBar.prompt(
-                prompt_text=prompt_text,
-                prompt_title="[danger]⚠️  DELETION CONFIRMATION REQUIRED"
-            ):
-                self.__operation_status = OperationStatus.SKIPPED
-                return
+        size = _Collector._get_size(self.__path)
+
+        if not self.__confirmed(size):
+            self.__operation_status = OperationStatus.SKIPPED
+            return
 
         # Create backup before deletion (unless safe_delete is used, since trash is recoverable)
         backup_path = None
@@ -200,29 +263,31 @@ class Path(_BaseCommand):
             from mac_cleanup.backup import backup_manager
             backup_path = backup_manager.create_backup(self.__path)
 
-        # Execute the command. Keep failures retryable while exposing the
-        # failure to the caller and progress reporting.
-        try:
-            result = super()._execute(ignore_errors=ignore_errors)
-        except Exception:
-            self.__operation_status = OperationStatus.FAILED
-            raise
-
-        # Log the operation
-        from mac_cleanup.logger import logger
-        action = "move_to_trash" if args.safe_delete else "delete"
-        success = result is not None  # Command execution result indicates success
-        logger.log_operation(self.__path.as_posix(), size, action, success)
-
-        # Log backup creation if it was created
         if backup_path:
             self.__operation_status = OperationStatus.BACKED_UP
             logger.log_operation(str(backup_path), size, "backup_created", True)
 
-        # A successful command removes the target (or hands it to Trash).
-        self.__operation_status = (
-            OperationStatus.COMPLETED
-            if not self.__path.exists() or args.safe_delete
-            else OperationStatus.FAILED
-        )
+        try:
+            result = super()._execute(ignore_errors=ignore_errors)
+        except Exception:
+            logger.log_operation(self.__path.as_posix(), size, self.__action, False)
+            self.__rollback(backup_path)
+            raise
+
+        # The base command returns None when its own prompt was declined: nothing ran,
+        # so the backup taken above is unnecessary.
+        if result is None:
+            if backup_path:
+                backup_path.unlink(missing_ok=True)
+            self.__operation_status = OperationStatus.SKIPPED
+            return None
+
+        logger.log_operation(self.__path.as_posix(), size, self.__action, True)
+
+        # A successful command leaves nothing behind (the target is in Trash for safe-delete).
+        if self.__remaining():
+            self.__rollback(backup_path)
+        else:
+            self.__operation_status = OperationStatus.COMPLETED
+
         return result

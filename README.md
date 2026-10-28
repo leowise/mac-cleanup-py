@@ -122,6 +122,7 @@ options:
   -f, --force        Accept all warnings
   -v, --verbose      Print folders to be deleted
   -r, --restore      Restore files from a backup
+  -l, --no-size-limit  Do not warn about paths larger than the 1 GB deletion size limit
 
 ```
 

@@ -17,4 +17,4 @@ class OperationStatus(str, Enum):
     def terminal(self) -> bool:
         """Whether the operation should not be attempted again."""
 
-        return self in {self.SKIPPED, self.COMPLETED, self.ROLLED_BACK}
+        return self in {self.COMPLETED, self.ROLLED_BACK}

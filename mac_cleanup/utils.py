@@ -240,7 +240,7 @@ def check_deletable(path: Path | str) -> bool:
     from mac_cleanup.path_validator import path_validator
 
     # Use the new path validator for comprehensive security checks
-    validation_result = path_validator.validate_path(path, check_size=True)
+    validation_result = path_validator.validate_path(path, check_size=False)
 
     # Path is deletable if it's valid (allowed and not blocked)
     return validation_result.get("valid", False)

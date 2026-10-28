@@ -48,6 +48,8 @@ jobs:
       - name: Install project dependencies
         run: |
           python -m pip install --upgrade pip poetry pip-audit
+          poetry config virtualenvs.in-project true
           poetry install --only main --no-root
-      - name: Audit installed dependencies
-        run: pip-audit
+      - name: Audit project dependencies
+        # Audit the project's own virtualenv, not the runner's global environment
+        run: pip-audit --path .venv/lib/python*/site-packages
