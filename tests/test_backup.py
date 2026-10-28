@@ -1,4 +1,5 @@
 import io
+import os
 import tarfile
 from pathlib import Path
 
@@ -130,3 +131,92 @@ def test_config_sets_backup_retention(tmp_path: Path, monkeypatch) -> None:
     config_file.write_text(toml.dumps({"enabled": ["x"], "custom_path": "", "backup_retention": 4}))
     Config(config_file)
     assert backup_manager.retention == 4
+
+
+def _archive(path: Path, members: list[tuple[str, str, str]]) -> Path:
+    """Build a tar.gz from (kind, name, content-or-linkname) tuples."""
+    with tarfile.open(path, "w:gz") as tar:
+        for kind, name, value in members:
+            info = tarfile.TarInfo(name)
+            if kind == "file":
+                info.size = len(value.encode())
+                tar.addfile(info, io.BytesIO(value.encode()))
+            elif kind == "dir":
+                info.type = tarfile.DIRTYPE
+                tar.addfile(info)
+            elif kind == "symlink":
+                info.type = tarfile.SYMTYPE
+                info.linkname = value
+                tar.addfile(info)
+            elif kind == "hardlink":
+                info.type = tarfile.LNKTYPE
+                info.linkname = value
+                tar.addfile(info)
+    return path
+
+
+def test_restore_keeps_safe_relative_symlinks(tmp_path: Path) -> None:
+    archive = _archive(
+        tmp_path / "a.tar.gz",
+        [("dir", "cache", ""), ("file", "cache/real.txt", "data"), ("symlink", "cache/link", "real.txt")],
+    )
+    destination = tmp_path / "restore"
+    destination.mkdir()
+    manager = BackupManager()
+    assert manager.restore_backup(archive, destination) is True
+    assert (destination / "cache" / "link").is_symlink()
+    assert (destination / "cache" / "link").read_text() == "data"
+    assert manager.last_skipped == []
+
+
+def test_restore_skips_symlinks_that_leave_the_restore_directory(tmp_path: Path) -> None:
+    archive = _archive(
+        tmp_path / "a.tar.gz",
+        [
+            ("file", "keep.txt", "data"),
+            ("symlink", "absolute", "/etc"),
+            ("symlink", "escape", "../outside"),
+            ("hardlink", "hard", "keep.txt"),
+        ],
+    )
+    destination = tmp_path / "restore"
+    destination.mkdir()
+    manager = BackupManager()
+    assert manager.restore_backup(archive, destination) is True
+    assert (destination / "keep.txt").read_text() == "data"
+    assert not os.path.lexists(destination / "absolute")
+    assert not os.path.lexists(destination / "escape")
+    assert not os.path.lexists(destination / "hard")
+    assert sorted(manager.last_skipped) == ["absolute", "escape", "hard"]
+
+
+def test_restore_never_writes_outside_through_an_archived_symlink(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    archive = _archive(
+        tmp_path / "a.tar.gz",
+        [("symlink", "link", str(outside)), ("file", "link/payload.txt", "pwned")],
+    )
+    destination = tmp_path / "restore"
+    destination.mkdir()
+    BackupManager().restore_backup(archive, destination)
+    assert list(outside.iterdir()) == []
+
+
+def test_restore_refuses_writing_through_a_kept_symlink(tmp_path: Path) -> None:
+    archive = _archive(
+        tmp_path / "a.tar.gz",
+        [("dir", "sub", ""), ("symlink", "link", "sub"), ("file", "link/payload.txt", "x")],
+    )
+    destination = tmp_path / "restore"
+    destination.mkdir()
+    assert BackupManager().restore_backup(archive, destination) is False
+    assert list(destination.iterdir()) == []
+
+
+def test_restore_conflict_detects_dangling_symlink(tmp_path: Path) -> None:
+    archive = _archive(tmp_path / "a.tar.gz", [("file", "item.txt", "data")])
+    destination = tmp_path / "restore"
+    destination.mkdir()
+    (destination / "item.txt").symlink_to(tmp_path / "missing")
+    assert BackupManager().restore_backup(archive, destination) is False

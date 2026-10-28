@@ -3,9 +3,9 @@
 import hashlib
 import os
 import tarfile
-from glob import glob
 from datetime import datetime
-from pathlib import Path
+from glob import glob
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
 
 from mac_cleanup.logger import logger
@@ -28,6 +28,9 @@ class BackupManager:
         # Backups made by one process share a run id; retention counts runs
         self._run_id = f"run{datetime.now().strftime('%Y%m%d%H%M%S')}{os.getpid()}"
         self._retention = DEFAULT_RETENTION
+
+        # Archive members skipped by the last restore because they were unsafe
+        self.last_skipped: List[str] = []
 
     @property
     def retention(self) -> int:
@@ -135,14 +138,66 @@ class BackupManager:
         backups.sort(key=lambda x: x.get("created", datetime.min), reverse=True)
         return backups
 
+    @staticmethod
+    def _link_is_safe(member: tarfile.TarInfo, restore_dir: Path) -> bool:
+        """Whether a symlink member stays inside ``restore_dir`` (hardlinks and devices never do)."""
+        if not member.issym() or os.path.isabs(member.linkname):
+            return False
+        target = os.path.normpath(os.path.join(restore_dir, os.path.dirname(member.name), member.linkname))
+        return target == str(restore_dir) or target.startswith(str(restore_dir) + os.sep)
+
+    def _plan_restore(self, members: List[tarfile.TarInfo], restore_dir: Path) -> Optional[List[tarfile.TarInfo]]:
+        """
+        Decide what to extract; ``None`` means the archive must be refused entirely.
+
+        Members that escape the restore directory, or are written through an archived
+        symlink, refuse the whole archive. Unsafe links and special files are skipped
+        and reported in ``last_skipped``.
+        """
+        self.last_skipped = []
+        extract: List[tarfile.TarInfo] = []
+        symlinks: set[str] = set()
+        seen: set[str] = set()
+
+        for member in members:
+            destination = Path(os.path.normpath(restore_dir / member.name))
+            if destination != restore_dir and restore_dir not in destination.parents:
+                return None
+
+            # Never write below a symlink that this archive creates
+            if any(str(parent) in symlinks for parent in PurePosixPath(member.name).parents):
+                return None
+
+            if member.issym() or member.islnk() or member.isdev() or member.isfifo():
+                if not self._link_is_safe(member, restore_dir):
+                    self.last_skipped.append(member.name)
+                    continue
+                symlinks.add(member.name)
+
+            # Restore is non-destructive: nothing may already exist (even a dangling symlink)
+            resolved_parent = destination.parent.resolve()
+            if member.name in seen or os.path.lexists(resolved_parent / destination.name):
+                return None
+            if restore_dir not in (resolved_parent, *resolved_parent.parents):
+                return None
+
+            seen.add(member.name)
+            extract.append(member)
+
+        return extract
+
     def restore_backup(self, backup_path: Path, restore_dir: Optional[Path] = None) -> bool:
         """
-        Restore a backup to the specified directory.
+        Restore a backup to the specified directory without overwriting anything.
+
+        Symlinks that stay inside the restore directory are restored; links that point
+        elsewhere, hardlinks and special files are skipped (see ``last_skipped``).
 
         :param backup_path: Path to the backup file
         :param restore_dir: Directory to restore to (defaults to current dir)
         :return: True if successful
         """
+        self.last_skipped = []
         if not backup_path.exists():
             return False
 
@@ -152,29 +207,15 @@ class BackupManager:
 
         try:
             with tarfile.open(backup_path, "r:gz") as tar:
-                members = tar.getmembers()
-                destinations: List[Path] = []
-                for member in members:
-                    # Backups must never be able to write outside the target
-                    # directory or materialize links/devices during restore.
-                    destination = (restore_dir / member.name).resolve()
-                    try:
-                        destination.relative_to(restore_dir)
-                    except ValueError:
-                        return False
-                    if member.issym() or member.islnk() or member.isdev():
-                        return False
-                    destinations.append(destination)
-
-                # Restore is intentionally non-destructive: callers must choose
-                # another directory if any archived item already exists.
-                if len(set(destinations)) != len(destinations) or any(
-                    destination.exists() for destination in destinations
-                ):
+                extract = self._plan_restore(tar.getmembers(), restore_dir)
+                if extract is None:
                     return False
 
-                for member in members:
-                    tar.extract(member, path=restore_dir)
+                for member in extract:
+                    if hasattr(tarfile, "data_filter"):
+                        tar.extract(member, path=restore_dir, filter="data")
+                    else:  # pragma: no cover - interpreters without extraction filters
+                        tar.extract(member, path=restore_dir)
             return True
         except (OSError, IOError, tarfile.TarError):
             return False

@@ -152,8 +152,15 @@ class EntryPoint:
         success = backup_manager.restore_backup(selected_backup["path"])
 
         if success:
+            skipped = backup_manager.last_skipped
+            skipped_note = (
+                f"\n[warning]Skipped {len(skipped)} unsafe link(s): {', '.join(skipped[:5])}"
+                f"{'…' if len(skipped) > 5 else ''}[/warning]"
+                if skipped
+                else ""
+            )
             print_panel(
-                text=f"Successfully restored {selected_backup['path'].name}",
+                text=f"Successfully restored {selected_backup['path'].name}{skipped_note}",
                 title="[success]Restore Complete"
             )
         else:
