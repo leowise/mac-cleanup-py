@@ -21,7 +21,9 @@ class ConfirmScreen(ModalScreen[bool]):
 
     DEFAULT_CSS = """
     ConfirmScreen { align: center middle; }
-    ConfirmScreen > Vertical { width: 80%; max-width: 100; height: auto; padding: 1 2; border: thick $error; background: $surface; }
+    ConfirmScreen > Vertical {
+        width: 80%; max-width: 100; height: auto; padding: 1 2; border: thick $error; background: $surface;
+    }
     ConfirmScreen #confirm-title { text-style: bold; margin-bottom: 1; }
     ConfirmScreen Horizontal { height: auto; margin-top: 1; align-horizontal: right; }
     """

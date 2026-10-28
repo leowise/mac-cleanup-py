@@ -251,6 +251,56 @@ class PathValidator:
         pairs = zip(path_parts, pattern_parts, strict=False)
         return all(fnmatch.fnmatchcase(part, expected) for part, expected in pairs)
 
+    def _check_file_size(self, path: Path, result: Dict[str, Any]) -> None:
+        size = path.stat().st_size
+        result["total_size"] = size
+        result["file_count"] = 1
+
+        if size > self.size_limits["max_individual_file"]:
+            result["blocked"] = True
+            result["reason"] = (
+                f"Individual file too large: {size} bytes "
+                f"(limit: {self.size_limits['max_individual_file']})"
+            )
+        elif size > self.size_limits["warning_threshold"]:
+            result["warnings"].append(
+                f"Large file detected: {size} bytes "
+                f"(warning threshold: {self.size_limits['warning_threshold']})"
+            )
+
+    def _check_dir_size(self, path: Path, result: Dict[str, Any]) -> None:
+        total_size = 0
+        file_count = 0
+
+        # Walk directory tree to calculate size
+        for root, _dirs, files in os.walk(path):
+            for file in files:
+                try:
+                    file_path = Path(root) / file
+                    file_size = file_path.stat().st_size
+                    total_size += file_size
+                    file_count += 1
+
+                    # Check individual file size
+                    if file_size > self.size_limits["max_individual_file"]:
+                        result["warnings"].append(f"Large file found: {file_path} ({file_size} bytes)")
+
+                except (OSError, PermissionError):
+                    continue  # Skip files we can't access
+
+        result["total_size"] = total_size
+        result["file_count"] = file_count
+
+        # Check thresholds
+        if total_size > self.size_limits["block_threshold"]:
+            result["blocked"] = True
+            result["reason"] = (
+                f"Total size too large: {total_size} bytes "
+                f"(limit: {self.size_limits['block_threshold']})"
+            )
+        elif total_size > self.size_limits["warning_threshold"]:
+            result["warnings"].append(f"Large operation detected: {total_size} bytes")
+
     def _check_size_limits(self, path: Path) -> Dict[str, Any]:
         """Check size limits for a path."""
         result: Dict[str, Any] = {
@@ -263,57 +313,9 @@ class PathValidator:
 
         try:
             if path.is_file():
-                size = path.stat().st_size
-                result["total_size"] = size
-                result["file_count"] = 1
-
-                if size > self.size_limits["max_individual_file"]:
-                    result["blocked"] = True
-                    result["reason"] = (
-                        f"Individual file too large: {size} bytes "
-                        f"(limit: {self.size_limits['max_individual_file']})"
-                    )
-                elif size > self.size_limits["warning_threshold"]:
-                    result["warnings"].append(
-                        f"Large file detected: {size} bytes "
-                        f"(warning threshold: {self.size_limits['warning_threshold']})"
-                    )
-
+                self._check_file_size(path, result)
             elif path.is_dir():
-                total_size = 0
-                file_count = 0
-
-                # Walk directory tree to calculate size
-                for root, _dirs, files in os.walk(path):
-                    for file in files:
-                        try:
-                            file_path = Path(root) / file
-                            total_size += file_path.stat().st_size
-                            file_count += 1
-
-                            # Check individual file size
-                            if file_path.stat().st_size > self.size_limits["max_individual_file"]:
-                                result["warnings"].append(
-                                    f"Large file found: {file_path} "
-                                    f"({file_path.stat().st_size} bytes)"
-                                )
-
-                        except (OSError, PermissionError):
-                            continue  # Skip files we can't access
-
-                result["total_size"] = total_size
-                result["file_count"] = file_count
-
-                # Check thresholds
-                if total_size > self.size_limits["block_threshold"]:
-                    result["blocked"] = True
-                    result["reason"] = (
-                        f"Total size too large: {total_size} bytes "
-                        f"(limit: {self.size_limits['block_threshold']})"
-                    )
-                elif total_size > self.size_limits["warning_threshold"]:
-                    result["warnings"].append(f"Large operation detected: {total_size} bytes")
-
+                self._check_dir_size(path, result)
         except (OSError, PermissionError) as e:
             result["warnings"].append(f"Could not check size: {e}")
 

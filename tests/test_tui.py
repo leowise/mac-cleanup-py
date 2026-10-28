@@ -1,5 +1,4 @@
 """Tests for TUI components."""
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -63,7 +62,7 @@ async def test_runner_handles_module_error(tmp_path):
         mock_stat.return_value = MagicMock(f_bavail=1000, f_frsize=4096)
 
         runner = CleanupRunner(config_path=config_path, module_fns={"bad": bad_module})
-        result = await runner.run(
+        await runner.run(
             enabled_modules=["bad"],
             dry_run=False,
             on_start=lambda _: None,
