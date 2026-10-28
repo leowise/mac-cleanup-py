@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import shutil
 import tarfile
 from datetime import datetime
 from glob import glob
@@ -15,6 +16,7 @@ from mac_cleanup.utils import bytes_to_human
 DEFAULT_RETENTION = 10
 _GLOB_CHARS = "*?["
 _RUN_SEPARATOR = "__"
+MIN_FREE_AFTER_BACKUP = 100 * 1024 * 1024  # keep this much free after writing a backup
 
 
 class BackupManager:
@@ -31,6 +33,9 @@ class BackupManager:
 
         # Archive members skipped by the last restore because they were unsafe
         self.last_skipped: List[str] = []
+
+        # Why the last create_backup failed (None if it succeeded or had nothing to back up)
+        self.last_error: Optional[str] = None
 
     @property
     def retention(self) -> int:
@@ -70,16 +75,48 @@ class BackupManager:
             return [(match, match.relative_to(root).as_posix()) for match in matches]
         return [(path, path.name)] if path.exists() or path.is_symlink() else []
 
-    def create_backup(self, path: Path, description: str = "") -> Optional[Path]:
+    @staticmethod
+    def _tree_size(entries: List[Tuple[Path, str]]) -> int:
+        """Uncompressed size of the items to archive (symlinks are not followed)."""
+        total = 0
+        for source, _ in entries:
+            if source.is_symlink() or source.is_file():
+                total += source.lstat().st_size
+                continue
+            for root, _dirs, files in os.walk(source):
+                for name in files:
+                    try:
+                        total += os.lstat(os.path.join(root, name)).st_size
+                    except OSError:
+                        continue
+        return total
+
+    def create_backup(
+        self, path: Path, description: str = "", expected_size: Optional[float] = None
+    ) -> Optional[Path]:
         """
         Create a tar.gz backup of the given path (all matches, for a glob).
 
+        Fails without writing anything when the backup directory lacks room for the
+        uncompressed data plus ``MIN_FREE_AFTER_BACKUP``; ``last_error`` says why.
+
         :param path: Path to backup
         :param description: Optional description for the backup
+        :param expected_size: Size of the data in bytes if the caller already knows it
         :return: Path to the created backup file, or None if nothing to back up or it failed
         """
+        self.last_error = None
         entries = self._entries(path)
         if not entries:
+            return None
+
+        needed = (expected_size if expected_size is not None else self._tree_size(entries)) + MIN_FREE_AFTER_BACKUP
+        free = shutil.disk_usage(self._backup_dir).free
+        if free < needed:
+            self.last_error = (
+                f"not enough disk space for a backup ({bytes_to_human(needed)} needed, {bytes_to_human(free)} free)"
+            )
+            logger.log_operation(str(path), 0, "backup_unavailable", False)
             return None
 
         # Generate backup filename with timestamp; the digest keeps long paths unique
@@ -98,9 +135,10 @@ class BackupManager:
             self.cleanup_old_backups()
             return backup_path
 
-        except (OSError, tarfile.TarError):
+        except (OSError, tarfile.TarError) as err:
             # Never leave a partial archive that could be mistaken for a complete backup
             backup_path.unlink(missing_ok=True)
+            self.last_error = f"backup failed: {err}"
             logger.log_operation(str(path), 0, "backup_failed", False)
             return None
 

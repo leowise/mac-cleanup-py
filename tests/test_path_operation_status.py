@@ -284,3 +284,54 @@ def test_safe_delete_command_passes_path_as_an_argument(monkeypatch: pytest.Monk
     command = CleanupPath._delete_command(Path('/tmp/a" & quit & "b'))
     assert "on run argv" in command
     assert '/tmp/a" & quit & "b' not in command.replace("'/tmp/a\" & quit & \"b'", "")
+
+
+def _no_space(monkeypatch: pytest.MonkeyPatch) -> None:
+    import collections
+
+    usage = collections.namedtuple("usage", "total used free")
+    monkeypatch.setattr("mac_cleanup.backup.shutil.disk_usage", lambda _: usage(10**12, 10**12 - 1, 1))
+
+
+def test_backup_is_refused_when_disk_space_is_short(isolated_state: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = _target(isolated_state)
+    _no_space(monkeypatch)
+
+    assert backup_manager.create_backup(target) is None
+    assert "space" in (backup_manager.last_error or "")
+    assert list(backup_manager.get_backup_dir().iterdir()) == []
+
+
+def test_missing_backup_asks_before_deleting(isolated_state: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = _target(isolated_state)
+    _no_space(monkeypatch)
+    prompts = _oversized(monkeypatch, [True, False, True, True])
+    monkeypatch.setitem(path_validator.size_limits, "block_threshold", 10**12)  # not oversized
+
+    operation = CleanupPath(str(target))
+    # Confirm the deletion, then refuse to delete without a backup
+    assert operation._execute() is None
+    assert target.exists()
+    assert operation.operation_status is OperationStatus.SKIPPED
+    assert "without a backup" in prompts[1]
+
+    # Retry and accept both questions
+    operation._execute()
+    assert not target.exists()
+    assert operation.operation_status is OperationStatus.COMPLETED
+
+
+def test_force_deletes_without_backup_but_warns(isolated_state: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = _target(isolated_state)
+    _no_space(monkeypatch)
+
+    operation = CleanupPath(str(target))
+    operation._execute()
+    assert not target.exists()
+    assert operation.operation_status is OperationStatus.COMPLETED
+    assert "BACKUP_UNAVAILABLE" in logger.read_recent_logs(20)
+
+
+def test_nothing_to_back_up_does_not_prompt(isolated_state: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert backup_manager.create_backup(isolated_state / "missing") is None
+    assert backup_manager.last_error is None

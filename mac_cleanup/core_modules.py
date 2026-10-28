@@ -179,6 +179,39 @@ class Path(_BaseCommand):
 
         return any(char in self.__path.as_posix() for char in "*?[")
 
+    def __backup(self, size: float) -> tuple[bool, Optional[Path_]]:
+        """
+        Back the target up before a permanent deletion.
+
+        Returns ``(proceed, backup_path)``. A backup that could not be made is never silent:
+        the user is asked whether to delete without one (``--force`` accepts and warns).
+        """
+
+        # Trash is recoverable, so safe-delete needs no backup
+        if args.safe_delete:
+            return True, None
+
+        from mac_cleanup.backup import backup_manager
+
+        backup_path = backup_manager.create_backup(self.__path, expected_size=size)
+        if backup_path or not backup_manager.last_error:
+            return True, backup_path
+
+        from mac_cleanup.console import console
+
+        message = f"No backup of {self.__path.as_posix()}: {backup_manager.last_error}."
+        if args.force:
+            console.print(f"[warning]{message} Deleting without a backup.[/warning]")
+            return True, None
+
+        from mac_cleanup.progress import ProgressBar
+
+        proceed = ProgressBar.prompt(
+            prompt_text=f"{message}\n\nDelete it without a backup?",
+            prompt_title="[danger]⚠️  NO BACKUP AVAILABLE",
+        )
+        return proceed, None
+
     def __nothing_to_do(self) -> bool:
         """Dry-run-only paths, undeletable or missing paths, and globs without matches."""
 
@@ -305,11 +338,10 @@ class Path(_BaseCommand):
             self.__operation_status = OperationStatus.SKIPPED
             return
 
-        # Create backup before deletion (unless safe_delete is used, since trash is recoverable)
-        backup_path = None
-        if not args.safe_delete:
-            from mac_cleanup.backup import backup_manager
-            backup_path = backup_manager.create_backup(self.__path)
+        backup_ok, backup_path = self.__backup(size)
+        if not backup_ok:
+            self.__operation_status = OperationStatus.SKIPPED
+            return
 
         if backup_path:
             self.__operation_status = OperationStatus.BACKED_UP
